@@ -1,0 +1,14 @@
+{
+  "name": "streaming-server",
+  "version": "1.0.0",
+  "description": "A simple HTTP server for viewing the low-latency stream.",
+  "main": "simple-http-server.js",
+  "scripts": {
+    "start": "node simple-http-server.js"
+  },
+  "author": "",
+  "license": "ISC"
+}
+
+
+

@@ -21,10 +21,13 @@ dependencyResolutionManagement {
             name = "GitHub Packages"
             setUrl("https://maven.pkg.github.com/FairyDevicesRD/thinklet.app.sdk")
             credentials {
-                val properties = java.util.Properties()
-                properties.load(file("github.properties").inputStream())
-                username = properties.getProperty("username") ?: ""
-                password = properties.getProperty("token") ?: ""
+                val propertiesFile = file("local.properties")
+                if (propertiesFile.exists()) {
+                    val properties = java.util.Properties()
+                    properties.load(propertiesFile.inputStream())
+                    username = properties.getProperty("USERNAME")
+                    password = properties.getProperty("TOKEN")
+                }
             }
         }
     }
