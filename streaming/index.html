@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>低延迟直播 (HTTP-FLV)</title>
+    <script src="https://cdn.jsdelivr.net/npm/flv.js@latest"></script>
+    <style>
+        body, html {
+            margin: 0;
+            padding: 0;
+            height: 100%;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            background-color: #2c3e50;
+            font-family: 'Arial', sans-serif;
+            color: #ecf0f1;
+        }
+        h1 {
+            margin-bottom: 20px;
+        }
+        video {
+            width: 80%;
+            max-width: 960px;
+            background-color: #000;
+            border: 3px solid #3498db;
+            border-radius: 5px;
+        }
+        .info {
+            margin-top: 20px;
+            padding: 10px;
+            background-color: #34495e;
+            border-radius: 5px;
+            font-size: 0.9em;
+        }
+        code {
+            background-color: #2c3e50;
+            padding: 2px 5px;
+            border-radius: 3px;
+            color: #e67e22;
+        }
+    </style>
+</head>
+<body>
+    <h1>SRS 低延迟直播 (HTTP-FLV)</h1>
+    <video id="videoElement" controls autoplay muted></video>
+    <div class="info">
+        <p>播放地址: <code id="streamUrl"></code></p>
+    </div>
+
+    <script>
+      const videoElement = document.getElementById('videoElement');
+      
+      // 注意: 请将 'localhost' 替换为你的电脑在局域网中的IP地址
+      // 安卓推流App和此页面需要在同一个局域网内
+      const hostIp = window.location.hostname || 'localhost';
+      const streamUrl = `http://${hostIp}:8080/thinklet.squid.run/test_stream.flv`;
+
+      document.getElementById('streamUrl').textContent = streamUrl;
+
+      if (flvjs.isSupported()) {
+        const flvPlayer = flvjs.createPlayer({
+          type: 'flv',
+          isLive: true,
+          url: streamUrl
+        });
+        flvPlayer.attachMediaElement(videoElement);
+        flvPlayer.load();
+        flvPlayer.play();
+      } else {
+        alert('您的浏览器不支持 flv.js');
+      }
+    </script>
+</body>
+</html>
+
+
+

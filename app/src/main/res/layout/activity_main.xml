@@ -171,16 +171,25 @@
         app:layout_constraintTop_toTopOf="@id/label_mic_mode"
         tools:text="android" />
 
-
     <TextView
-        android:id="@+id/title_app_status"
+        android:id="@+id/label_app_status"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:layout_marginTop="8dp"
-        android:text="@string/app_status"
-        android:textAppearance="@style/TextAppearance.AppCompat.Title"
+        android:layout_marginTop="16dp"
+        android:text="@string/label_app_status"
+        android:textAppearance="@style/TextAppearance.AppCompat.Body2"
         app:layout_constraintStart_toStartOf="parent"
-        app:layout_constraintTop_toBottomOf="@id/label_mic_mode" />
+        app:layout_constraintTop_toBottomOf="@id/mic_mode" />
+
+    <TextView
+        android:id="@+id/connection_status"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginStart="8dp"
+        android:textAppearance="@style/TextAppearance.AppCompat.Body2"
+        app:layout_constraintStart_toEndOf="@id/label_app_status"
+        app:layout_constraintTop_toTopOf="@id/label_app_status"
+        tools:text="CONNECTED" />
 
     <TextView
         android:id="@+id/label_permission_granted"
@@ -188,7 +197,7 @@
         android:layout_height="wrap_content"
         android:text="@string/label_permission_granted"
         app:layout_constraintStart_toStartOf="parent"
-        app:layout_constraintTop_toBottomOf="@id/title_app_status" />
+        app:layout_constraintTop_toBottomOf="@id/label_app_status" />
 
     <TextView
         android:id="@+id/permission_granted"
@@ -203,9 +212,11 @@
         android:id="@+id/label_stream_prepared"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
+        android:layout_marginTop="8dp"
         android:text="@string/label_stream_prepared"
+        android:textAppearance="@style/TextAppearance.AppCompat.Body2"
         app:layout_constraintStart_toStartOf="parent"
-        app:layout_constraintTop_toBottomOf="@id/label_permission_granted" />
+        app:layout_constraintTop_toBottomOf="@id/label_app_status" />
 
     <TextView
         android:id="@+id/stream_prepared"
@@ -228,7 +239,8 @@
         android:id="@+id/streaming"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:layout_marginStart="4dp"
+        android:layout_marginStart="8dp"
+        android:textAppearance="@style/TextAppearance.AppCompat.Body2"
         app:layout_constraintStart_toEndOf="@id/label_streaming"
         app:layout_constraintTop_toTopOf="@id/label_streaming"
         tools:text="true" />

@@ -1,0 +1,11 @@
+services:
+  srs:
+    image: ossrs/srs:5
+    container_name: srs-server
+    ports:
+      - "1935:1935" # RTMP port
+      - "8080:8080" # HTTP-FLV port
+      - "1985:1985" # HTTP API port
+    volumes:
+      - ./srs.conf:/usr/local/srs/conf/srs.conf
+    restart: always
