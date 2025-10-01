@@ -1,40 +1,27 @@
-# Android Live Streaming Source Code
+# 当前项目原始代码
 
-This document contains the complete source code for the Android live streaming feature, structured for easy migration to other platforms.
+本文档包含当前项目中所有关键类的完整代码，供参考和学习。
 
-## File Structure
+> **重要说明**: 本项目使用 **CameraXSource**（RootEncoder 的 extra-sources 包提供），这是专门为 CameraX 设计的视频源，能够自动集成 CameraX 的视频流，无需手动实现视频源或手动喂帧。
 
-```
-app
-└── src
-    ├── main
-    │   ├── java
-    │   │   └── ai
-    │   │       └── fd
-    │   │           └── thinklet
-    │   │               └── app
-    │   │                   └── squid
-    │   │                       └── run
-    │   │                           ├── MainActivity.kt
-    │   │                           ├── MainViewModel.kt
-    │   │                           ├── ConfigHelper.kt
-    │   │                           ├── ConfigManager.kt
-    │   │                           ├── DefaultConfig.kt
-    │   │                           └── PermissionHelper.kt
-    │   ├── res
-    │   │   ├── layout
-    │   │   │   └── activity_main.xml
-    │   │   └── values
-    │   │       └── strings.xml
-    │   └── AndroidManifest.xml
-    ...
-```
+## 目录
+
+1. [MainActivity](#mainactivity) - Activity 主类，UI 和生命周期管理
+2. [MainViewModel](#mainviewmodel) - ViewModel，直播状态管理和 CameraXSource 集成
+3. [StandardMicrophoneSource](#standardmicrophonesource) - 标准麦克风音频源
+4. [ThinkletMicrophoneSource](#thinkletmicrophonesource) - Thinklet 多麦克风音频源
+5. [ConfigHelper](#confighelper) - 配置助手类，提供预设配置
+6. [ConfigManager](#configmanager) - 配置管理器，持久化配置
+7. [DefaultConfig](#defaultconfig) - 默认配置常量
+8. [PermissionHelper](#permissionhelper) - 权限管理助手类
 
 ---
 
-## Source Code
+## MainActivity
 
-### `app/src/main/java/ai/fd/thinklet/app/squid/run/MainActivity.kt`
+**文件**: `app/src/main/java/ai/fd/thinklet/app/squid/run/MainActivity.kt`
+
+完整的Activity实现，展示如何使用MainViewModel进行直播。
 
 ```kotlin
 package ai.fd.thinklet.app.squid.run
@@ -161,7 +148,7 @@ class MainActivity : AppCompatActivity() {
         super.onResume()
         checkAndRequestPermissions()
         maybeNotifyLaunchErrors()
-        viewModel.maybePrepareStreaming()
+        viewModel.maybePrepareStreaming(this)  // ⚠️ 注意：需要传入 LifecycleOwner
     }
 
     override fun onPause() {
@@ -258,11 +245,9 @@ class MainActivity : AppCompatActivity() {
         
         if (requestCode == PermissionHelper.PERMISSION_REQUEST_CODE) {
             if (grantResults.isNotEmpty() && grantResults.all { it == PackageManager.PERMISSION_GRANTED }) {
-                // 所有权限都已授予
                 binding.permissionGranted.text = "true"
-                viewModel.maybePrepareStreaming()
+                viewModel.maybePrepareStreaming(this)
             } else {
-                // 有权限被拒绝
                 binding.permissionGranted.text = "false"
                 val deniedPermissions = permissionHelper.getDeniedPermissionNames()
                 val hasCameraPermission = deniedPermissions.contains("摄像头")
@@ -300,337 +285,16 @@ class MainActivity : AppCompatActivity() {
 
 ---
 
-### `app/src/main/res/layout/activity_main.xml`
+## MainViewModel
 
-```xml
-<?xml version="1.0" encoding="utf-8"?>
-<androidx.constraintlayout.widget.ConstraintLayout xmlns:android="http://schemas.android.com/apk/res/android"
-    xmlns:app="http://schemas.android.com/apk/res-auto"
-    xmlns:tools="http://schemas.android.com/tools"
-    android:id="@+id/main"
-    android:layout_width="match_parent"
-    android:layout_height="match_parent"
-    android:layout_margin="16dp"
-    tools:context=".MainActivity">
+**文件**: `app/src/main/java/ai/fd/thinklet/app/squid/run/MainViewModel.kt`
 
-    <TextView
-        android:id="@+id/title_launch_parameter"
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:text="@string/launch_parameters"
-        android:textAppearance="@style/TextAppearance.AppCompat.Title"
-        app:layout_constraintStart_toStartOf="parent"
-        app:layout_constraintTop_toTopOf="parent" />
+> **重要**: 此 ViewModel 使用 **CameraXSource**（来自 `com.pedro.extrasources` 包），这是 RootEncoder 专门为 CameraX 提供的视频源。
 
-    <TextView
-        android:id="@+id/label_stream_url"
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:text="@string/label_stream_url"
-        app:layout_constraintStart_toStartOf="parent"
-        app:layout_constraintTop_toBottomOf="@id/title_launch_parameter" />
-
-    <TextView
-        android:id="@+id/stream_url"
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:layout_marginStart="4dp"
-        app:layout_constraintStart_toEndOf="@id/label_stream_url"
-        app:layout_constraintTop_toTopOf="@id/label_stream_url"
-        tools:text="rtmp://example.com" />
-
-    <TextView
-        android:id="@+id/label_stream_key"
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:text="@string/label_stream_key"
-        app:layout_constraintStart_toStartOf="parent"
-        app:layout_constraintTop_toBottomOf="@id/label_stream_url" />
-
-    <TextView
-        android:id="@+id/stream_key"
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:layout_marginStart="4dp"
-        app:layout_constraintStart_toEndOf="@id/label_stream_key"
-        app:layout_constraintTop_toTopOf="@id/label_stream_key"
-        tools:text="xxxx-xxxx-xxxx-xxxx" />
-
-    <TextView
-        android:id="@+id/label_dimension"
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:text="@string/label_dimension"
-        app:layout_constraintStart_toStartOf="parent"
-        app:layout_constraintTop_toBottomOf="@id/label_stream_key" />
-
-    <TextView
-        android:id="@+id/dimension"
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:layout_marginStart="4dp"
-        app:layout_constraintStart_toEndOf="@id/label_dimension"
-        app:layout_constraintTop_toTopOf="@id/label_dimension"
-        tools:text="(w)1920 x (h)1080" />
-
-
-    <TextView
-        android:id="@+id/label_video_bitrate"
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:text="@string/label_video_bitrate"
-        app:layout_constraintStart_toStartOf="parent"
-        app:layout_constraintTop_toBottomOf="@id/label_dimension" />
-
-    <TextView
-        android:id="@+id/video_bitrate"
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:layout_marginStart="4dp"
-        app:layout_constraintStart_toEndOf="@id/label_video_bitrate"
-        app:layout_constraintTop_toTopOf="@id/label_video_bitrate"
-        tools:text="8000" />
-
-    <TextView
-        android:id="@+id/label_sampling_rate"
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:text="@string/label_sampling_rate"
-        app:layout_constraintStart_toStartOf="parent"
-        app:layout_constraintTop_toBottomOf="@id/label_video_bitrate" />
-
-    <TextView
-        android:id="@+id/sampling_rate"
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:layout_marginStart="4dp"
-        app:layout_constraintStart_toEndOf="@id/label_sampling_rate"
-        app:layout_constraintTop_toTopOf="@id/label_sampling_rate"
-        tools:text="96" />
-
-    <TextView
-        android:id="@+id/label_audio_bitrate"
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:text="@string/label_audio_bitrate"
-        app:layout_constraintStart_toStartOf="parent"
-        app:layout_constraintTop_toBottomOf="@id/label_sampling_rate" />
-
-    <TextView
-        android:id="@+id/audio_bitrate"
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:layout_marginStart="4dp"
-        app:layout_constraintStart_toEndOf="@id/label_audio_bitrate"
-        app:layout_constraintTop_toTopOf="@id/label_audio_bitrate"
-        tools:text="96" />
-
-    <TextView
-        android:id="@+id/label_audio_channel"
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:text="@string/label_audio_channel"
-        app:layout_constraintStart_toStartOf="parent"
-        app:layout_constraintTop_toBottomOf="@id/label_audio_bitrate" />
-
-    <TextView
-        android:id="@+id/audio_channel"
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:layout_marginStart="4dp"
-        app:layout_constraintStart_toEndOf="@id/label_audio_channel"
-        app:layout_constraintTop_toTopOf="@id/label_audio_channel"
-        tools:text="stereo" />
-
-    <TextView
-        android:id="@+id/label_echo_canceler"
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:text="@string/label_echo_canceler"
-        app:layout_constraintStart_toStartOf="parent"
-        app:layout_constraintTop_toBottomOf="@id/label_audio_channel" />
-
-    <TextView
-        android:id="@+id/echo_canceler"
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:layout_marginStart="4dp"
-        app:layout_constraintStart_toEndOf="@id/label_echo_canceler"
-        app:layout_constraintTop_toTopOf="@id/label_echo_canceler"
-        tools:text="true" />
-
-    <TextView
-        android:id="@+id/label_mic_mode"
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:text="@string/label_mic_mode"
-        app:layout_constraintStart_toStartOf="parent"
-        app:layout_constraintTop_toBottomOf="@id/label_echo_canceler" />
-
-    <TextView
-        android:id="@+id/mic_mode"
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:layout_marginStart="4dp"
-        app:layout_constraintStart_toEndOf="@id/label_mic_mode"
-        app:layout_constraintTop_toTopOf="@id/label_mic_mode"
-        tools:text="android" />
-
-    <TextView
-        android:id="@+id/label_app_status"
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:layout_marginTop="16dp"
-        android:text="@string/label_app_status"
-        android:textAppearance="@style/TextAppearance.AppCompat.Body2"
-        app:layout_constraintStart_toStartOf="parent"
-        app:layout_constraintTop_toBottomOf="@id/mic_mode" />
-
-    <TextView
-        android:id="@+id/connection_status"
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:layout_marginStart="8dp"
-        android:textAppearance="@style/TextAppearance.AppCompat.Body2"
-        app:layout_constraintStart_toEndOf="@id/label_app_status"
-        app:layout_constraintTop_toTopOf="@id/label_app_status"
-        tools:text="CONNECTED" />
-
-    <TextView
-        android:id="@+id/label_permission_granted"
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:text="@string/label_permission_granted"
-        app:layout_constraintStart_toStartOf="parent"
-        app:layout_constraintTop_toBottomOf="@id/label_app_status" />
-
-    <TextView
-        android:id="@+id/permission_granted"
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:layout_marginStart="4dp"
-        app:layout_constraintStart_toEndOf="@id/label_permission_granted"
-        app:layout_constraintTop_toTopOf="@id/label_permission_granted"
-        tools:text="true" />
-
-    <TextView
-        android:id="@+id/label_stream_prepared"
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:layout_marginTop="8dp"
-        android:text="@string/label_stream_prepared"
-        android:textAppearance="@style/TextAppearance.AppCompat.Body2"
-        app:layout_constraintStart_toStartOf="parent"
-        app:layout_constraintTop_toBottomOf="@id/label_app_status" />
-
-    <TextView
-        android:id="@+id/stream_prepared"
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:layout_marginStart="4dp"
-        app:layout_constraintStart_toEndOf="@id/label_stream_prepared"
-        app:layout_constraintTop_toTopOf="@id/label_stream_prepared"
-        tools:text="true" />
-
-    <TextView
-        android:id="@+id/label_streaming"
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:text="@string/label_streaming"
-        app:layout_constraintStart_toStartOf="parent"
-        app:layout_constraintTop_toBottomOf="@id/label_stream_prepared" />
-
-    <TextView
-        android:id="@+id/streaming"
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:layout_marginStart="8dp"
-        android:textAppearance="@style/TextAppearance.AppCompat.Body2"
-        app:layout_constraintStart_toEndOf="@id/label_streaming"
-        app:layout_constraintTop_toTopOf="@id/label_streaming"
-        tools:text="true" />
-
-    <TextView
-        android:id="@+id/label_audio_muted"
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:text="@string/label_audio_muted"
-        app:layout_constraintStart_toStartOf="parent"
-        app:layout_constraintTop_toBottomOf="@id/label_streaming" />
-
-    <TextView
-        android:id="@+id/audio_muted"
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:layout_marginStart="4dp"
-        app:layout_constraintStart_toEndOf="@id/label_audio_muted"
-        app:layout_constraintTop_toTopOf="@id/label_audio_muted"
-        tools:text="true" />
-
-    <TextView
-        android:id="@+id/title_streaming_events"
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:layout_marginTop="8dp"
-        android:text="@string/streaming_events"
-        android:textAppearance="@style/TextAppearance.AppCompat.Title"
-        app:layout_constraintStart_toStartOf="parent"
-        app:layout_constraintTop_toBottomOf="@id/label_audio_muted" />
-
-    <TextView
-        android:id="@+id/streaming_events"
-        android:layout_width="0dp"
-        android:layout_height="wrap_content"
-        app:layout_constraintEnd_toEndOf="parent"
-        app:layout_constraintStart_toStartOf="parent"
-        app:layout_constraintTop_toBottomOf="@id/title_streaming_events"
-        tools:text="event1\nevent2" />
-
-    <ViewStub
-        android:id="@+id/preview_stub"
-        android:layout_width="0dp"
-        android:layout_height="0dp"
-        android:layout="@layout/preview"
-        app:layout_constraintBottom_toBottomOf="parent"
-        app:layout_constraintDimensionRatio="1"
-        app:layout_constraintEnd_toEndOf="parent"
-        app:layout_constraintHorizontal_bias="1"
-        app:layout_constraintStart_toStartOf="parent"
-        app:layout_constraintWidth_percent="0.5" />
-
-</androidx.constraintlayout.widget.ConstraintLayout>
-```
-
----
-
-### `app/src/main/res/values/strings.xml`
-
-```xml
-<resources>
-    <string name="app_name">thinklet.squid.run</string>
-    <string name="launch_parameters">Launch Parameters</string>
-    <string name="label_stream_url">Stream URL: </string>
-    <string name="label_stream_key">Stream Key: </string>
-    <string name="label_dimension">Video Dimension: </string>
-    <string name="label_video_bitrate">Video Bitrate (kbps): </string>
-    <string name="label_sampling_rate">Audio Sampling Rate (kHz): </string>
-    <string name="label_audio_bitrate">Audio Bitrate (kbps): </string>
-    <string name="label_audio_channel">Audio Channel: </string>
-    <string name="label_echo_canceler">Echo Canceler: </string>
-    <string name="label_mic_mode">Mic Mode: </string>
-    <string name="label_permission_granted">Permission Granted: </string>
-    <string name="label_app_status">App Status:</string>
-    <string name="label_stream_prepared">Stream Prepared: </string>
-    <string name="label_streaming">Streaming: </string>
-    <string name="label_audio_muted">Audio Muted: </string>
-    <string name="dimension_text">(w)%1$d x (h)%2$d</string>
-    <string name="streaming_events">Streaming Events</string>
-</resources>
-```
-
----
-
-### `app/src/main/java/ai/fd/thinklet/app/squid/run/MainViewModel.kt`
+**核心特点**:
+- 使用 `CameraXSource` 自动集成 CameraX
+- 无需手动实现视频源或手动喂帧
+- CameraXSource 会自动处理 CameraX 的视频流
 
 ```kotlin
 package ai.fd.thinklet.app.squid.run
@@ -642,18 +306,21 @@ import android.app.Application
 import android.content.Context
 import android.content.pm.PackageManager
 import android.hardware.camera2.CameraManager
+import android.util.Log
 import android.os.Build
 import android.view.Surface
 import androidx.annotation.MainThread
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.AndroidViewModel
+import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.viewModelScope
 import com.pedro.common.ConnectChecker
 import com.pedro.encoder.input.gl.render.filters.RotationFilterRender
+import com.pedro.encoder.utils.gl.GlUtil
 import com.pedro.library.generic.GenericStream
-import com.pedro.library.util.sources.audio.MicrophoneSource
-import com.pedro.library.util.sources.video.Camera2Source
+import com.pedro.encoder.input.sources.audio.AudioSource
+import com.pedro.extrasources.CameraXSource
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.flow.Flow
@@ -667,6 +334,7 @@ import kotlinx.coroutines.flow.runningFold
 import kotlinx.coroutines.launch
 import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
+import kotlinx.coroutines.delay
 
 class MainViewModel(
     private val application: Application,
@@ -743,16 +411,14 @@ class MainViewModel(
         ContextCompat.checkSelfPermission(application, it) == PackageManager.PERMISSION_GRANTED
     }
 
-    /**
-     * 检查设备是否有可用的相机
-     */
     private fun isCameraAvailable(): Boolean {
         return try {
             val cameraManager = application.getSystemService(Context.CAMERA_SERVICE) as CameraManager
             val cameraIds = cameraManager.cameraIdList
+            Log.i("MainViewModel", "发现 ${cameraIds.size} 个摄像头")
             cameraIds.isNotEmpty()
         } catch (e: Exception) {
-            // 如果出现任何异常，认为相机不可用
+            Log.e("MainViewModel", "相机检查失败", e)
             streamingEventMutableSharedFlow.tryEmit(
                 StreamingEvent("相机检查失败: ${e.message}")
             )
@@ -761,103 +427,104 @@ class MainViewModel(
     }
 
     @MainThread
-    fun maybePrepareStreaming() {
+    fun maybePrepareStreaming(lifecycleOwner: LifecycleOwner) {  // ⚠️ 需要 LifecycleOwner 参数
         if (streamUrl == null || streamKey == null || !isAllPermissionGranted() || _isPrepared.value) {
             _isPrepared.value = false
             return
         }
 
-        // 检查相机是否可用（必需的硬件）
-        if (!isCameraAvailable()) {
-            streamingEventMutableSharedFlow.tryEmit(
-                StreamingEvent("错误: 未检测到可用的相机设备，无法进行直播")
-            )
-            _isPrepared.value = false
-            return
-        }
-
-        try {
-            val angle = Angle()
-            val camera2Source = Camera2Source(application)
-            val isInitiallyMuted = _isAudioMuted.value
-            val audioSource = when (micMode) {
-                MicMode.ANDROID -> createMicrophoneSource(isInitiallyMuted)
-
-                MicMode.THINKLET_5 -> createThinkletMicrophoneSource(
-                    application,
-                    MultiChannelAudioRecord.Channel.CHANNEL_FIVE,
-                    isInitiallyMuted
-                )
-
-                MicMode.THINKLET_6 -> createThinkletMicrophoneSource(
-                    application,
-                    MultiChannelAudioRecord.Channel.CHANNEL_SIX,
-                    isInitiallyMuted
-                )
-            }
-            val localStream = stream ?: GenericStream(
-                application,
-                ConnectionCheckerImpl(streamingEventMutableSharedFlow, _isStreaming, _connectionStatus),
-                camera2Source,
-                audioSource
-            ).apply {
-                getGlInterface().autoHandleOrientation = false
-                if (angle.isLandscape()) {
-                    val rotateFilterRender = RotationFilterRender().apply {
-                        this.rotation = 270
-                    }
-                    getGlInterface().addFilter(rotateFilterRender)
-                }
-            }
-            val isPrepared = try {
-                // Note: The output size is converted by 90 degrees inside RootEncoder when the rotation
-                // is portrait. Therefore, we intentionally pass `longSide` and `shortSide` to `width`
-                // and `height` respectively so that it will be output at the correct size.
-                val isVideoPrepared = localStream.prepareVideo(
-                    width = longSide,
-                    height = shortSide,
-                    bitrate = videoBitrateBps,
-                    rotation = angle.current()
-                )
-                val isAudioPrepared = localStream.prepareAudio(
-                    sampleRate = audioSampleRateHz,
-                    isStereo = audioChannel == AudioChannel.STEREO,
-                    bitrate = audioBitrateBps,
-                    echoCanceler = isEchoCancelerEnabled
-                )
-                isVideoPrepared && isAudioPrepared
-            } catch (e: IllegalArgumentException) {
+        viewModelScope.launch {
+            if (!isCameraAvailable()) {
                 streamingEventMutableSharedFlow.tryEmit(
-                    StreamingEvent("直播参数设置失败: ${e.message}")
+                    StreamingEvent("错误: 未检测到可用的相机设备，无法进行直播")
                 )
-                false
+                _isPrepared.value = false
+                return@launch
+            }
+
+            try {
+                val angle = Angle()
+                // ⚠️ 使用 CameraXSource（RootEncoder 提供的 CameraX 视频源）
+                val cameraXSource = CameraXSource(application)
+                val isInitiallyMuted = _isAudioMuted.value
+                val audioSource = when (micMode) {
+                    MicMode.ANDROID -> createMicrophoneSource(isInitiallyMuted)
+
+                    MicMode.THINKLET_5 -> createThinkletMicrophoneSource(
+                        application,
+                        MultiChannelAudioRecord.Channel.CHANNEL_FIVE,
+                        isInitiallyMuted
+                    )
+
+                    MicMode.THINKLET_6 -> createThinkletMicrophoneSource(
+                        application,
+                        MultiChannelAudioRecord.Channel.CHANNEL_SIX,
+                        isInitiallyMuted
+                    )
+                }
+                val localStream = stream ?: GenericStream(
+                    application,
+                    ConnectionCheckerImpl(streamingEventMutableSharedFlow, _isStreaming, _connectionStatus),
+                    cameraXSource,
+                    audioSource
+                ).apply {
+                    getGlInterface().autoHandleOrientation = false
+                    if (angle.isLandscape()) {
+                        val rotateFilterRender = RotationFilterRender().apply {
+                            this.rotation = 270
+                        }
+                        getGlInterface().addFilter(rotateFilterRender)
+                    }
+                }
+                val isPrepared = try {
+                    // Note: The output size is converted by 90 degrees inside RootEncoder when the rotation
+                    // is portrait. Therefore, we intentionally pass `longSide` and `shortSide` to `width`
+                    // and `height` respectively so that it will be output at the correct size.
+                    val isVideoPrepared = localStream.prepareVideo(
+                        width = longSide,
+                        height = shortSide,
+                        bitrate = videoBitrateBps,
+                        rotation = getDeviceRotation()
+                    )
+                    val isAudioPrepared = localStream.prepareAudio(
+                        sampleRate = audioSampleRateHz,
+                        isStereo = audioChannel == AudioChannel.STEREO,
+                        bitrate = audioBitrateBps,
+                        echoCanceler = isEchoCancelerEnabled
+                    )
+                    isVideoPrepared && isAudioPrepared
+                } catch (e: IllegalArgumentException) {
+                    streamingEventMutableSharedFlow.tryEmit(
+                        StreamingEvent("直播参数设置失败: ${e.message}")
+                    )
+                    false
+                } catch (e: Exception) {
+                    streamingEventMutableSharedFlow.tryEmit(
+                        StreamingEvent("直播准备失败: ${e.message}")
+                    )
+                    false
+                }
+                
+                if (isPrepared) {
+                    stream = localStream
+                    _isPrepared.value = true
+                    streamingEventMutableSharedFlow.tryEmit(
+                        StreamingEvent("直播准备完成")
+                    )
+                } else {
+                    _isPrepared.value = false
+                }
             } catch (e: Exception) {
                 streamingEventMutableSharedFlow.tryEmit(
-                    StreamingEvent("直播准备失败: ${e.message}")
+                    StreamingEvent("相机初始化失败: ${e.message}")
                 )
-                false
-            }
-            
-            if (isPrepared) {
-                stream = localStream
-                _isPrepared.value = true
-                streamingEventMutableSharedFlow.tryEmit(
-                    StreamingEvent("直播准备完成")
-                )
-            } else {
                 _isPrepared.value = false
             }
-        } catch (e: Exception) {
-            // 捕获相机初始化相关的所有异常
-            streamingEventMutableSharedFlow.tryEmit(
-                StreamingEvent("相机初始化失败: ${e.message}")
-            )
-            _isPrepared.value = false
         }
     }
 
-    private fun createMicrophoneSource(isInitiallyMuted: Boolean): MicrophoneSource {
-        val microphoneSource = MicrophoneSource()
+    private fun createMicrophoneSource(isInitiallyMuted: Boolean): StandardMicrophoneSource {
+        val microphoneSource = StandardMicrophoneSource()
         if (isInitiallyMuted) {
             microphoneSource.mute()
         }
@@ -931,7 +598,7 @@ class MainViewModel(
         val audioSource = stream?.audioSource ?: return
         when (audioSource) {
             is ThinkletMicrophoneSource -> audioSource.mute()
-            is MicrophoneSource -> audioSource.mute()
+            is StandardMicrophoneSource -> audioSource.mute()
         }
     }
 
@@ -940,7 +607,7 @@ class MainViewModel(
         val audioSource = stream?.audioSource ?: return
         when (audioSource) {
             is ThinkletMicrophoneSource -> audioSource.unMute()
-            is MicrophoneSource -> audioSource.unMute()
+            is StandardMicrophoneSource -> audioSource.unMute()
         }
     }
 
@@ -1029,6 +696,10 @@ class MainViewModel(
         }
     }
 
+    private fun getDeviceRotation(): Int {
+        return angle.current()
+    }
+
     companion object {
         private const val STREAMING_EVENT_BUFFER_SIZE = 15
     }
@@ -1037,7 +708,274 @@ class MainViewModel(
 
 ---
 
-### `app/src/main/java/ai/fd/thinklet/app/squid/run/ConfigHelper.kt`
+## StandardMicrophoneSource
+
+**文件**: `app/src/main/java/ai/fd/thinklet/app/squid/run/StandardMicrophoneSource.kt`
+
+标准麦克风音频源，继承自 RootEncoder 的 `AudioSource`，支持静音功能。
+
+```kotlin
+package ai.fd.thinklet.app.squid.run
+
+import android.media.AudioFormat
+import android.media.AudioRecord
+import android.media.MediaRecorder
+import com.pedro.encoder.Frame
+import com.pedro.encoder.input.audio.GetMicrophoneData
+import com.pedro.encoder.input.sources.audio.AudioSource
+
+/**
+ * 标准麦克风音频源，支持静音功能
+ */
+class StandardMicrophoneSource(
+    private val audioSourceType: Int = MediaRecorder.AudioSource.DEFAULT
+) : AudioSource() {
+
+    private var isMuted: Boolean = false
+    private var audioRecord: AudioRecord? = null
+    private var isRecording = false
+    private var thread: Thread? = null
+
+    override fun create(
+        sampleRate: Int,
+        isStereo: Boolean,
+        echoCanceler: Boolean,
+        noiseSuppressor: Boolean
+    ): Boolean {
+        return try {
+            val channel = if (isStereo) AudioFormat.CHANNEL_IN_STEREO else AudioFormat.CHANNEL_IN_MONO
+            val bufferSize = AudioRecord.getMinBufferSize(sampleRate, channel, AudioFormat.ENCODING_PCM_16BIT)
+            
+            if (bufferSize <= 0) {
+                return false
+            }
+            
+            audioRecord = AudioRecord(audioSourceType, sampleRate, channel, AudioFormat.ENCODING_PCM_16BIT, bufferSize * 2)
+            audioRecord?.state == AudioRecord.STATE_INITIALIZED
+        } catch (e: Exception) {
+            false
+        }
+    }
+
+    override fun start(getMicrophoneData: GetMicrophoneData) {
+        val record = audioRecord ?: return
+        
+        if (isRecording) return
+        
+        isRecording = true
+        record.startRecording()
+        
+        thread = Thread {
+            val bufferSize = AudioRecord.getMinBufferSize(
+                sampleRate,
+                if (isStereo) AudioFormat.CHANNEL_IN_STEREO else AudioFormat.CHANNEL_IN_MONO,
+                AudioFormat.ENCODING_PCM_16BIT
+            )
+            val buffer = ByteArray(bufferSize)
+            
+            while (isRecording) {
+                val read = record.read(buffer, 0, buffer.size)
+                if (read > 0) {
+                    val data = if (isMuted) {
+                        ByteArray(read) // 静音数据（全0）
+                    } else {
+                        buffer.copyOf(read)
+                    }
+                    val timeStamp = System.nanoTime() / 1000L
+                    getMicrophoneData.inputPCMData(Frame(data, 0, read, timeStamp))
+                }
+            }
+        }.apply { start() }
+    }
+
+    override fun stop() {
+        isRecording = false
+        thread?.interrupt()
+        thread = null
+        audioRecord?.stop()
+    }
+
+    override fun isRunning(): Boolean {
+        return isRecording
+    }
+
+    override fun release() {
+        stop()
+        audioRecord?.release()
+        audioRecord = null
+    }
+
+    fun mute() {
+        isMuted = true
+    }
+
+    fun unMute() {
+        isMuted = false
+    }
+}
+```
+
+---
+
+## ThinkletMicrophoneSource
+
+**文件**: `app/src/main/java/ai/fd/thinklet/app/squid/run/ThinkletMicrophoneSource.kt`
+
+Thinklet 多麦克风音频源，支持选择不同的音频通道。
+
+```kotlin
+package ai.fd.thinklet.app.squid.run
+
+import ai.fd.thinklet.sdk.audio.MultiChannelAudioRecord
+import ai.fd.thinklet.sdk.audio.RawAudioRecordWrapper
+import android.annotation.SuppressLint
+import android.content.Context
+import android.util.Log
+import com.pedro.encoder.Frame
+import com.pedro.encoder.input.audio.GetMicrophoneData
+import com.pedro.encoder.input.sources.audio.AudioSource
+
+class ThinkletMicrophoneSource(
+    private val context: Context,
+    private val inputChannel: MultiChannelAudioRecord.Channel
+) : AudioSource() {
+
+    private var isMuted: Boolean = false
+
+    private var bridge: RawAudioRecordWrapperBridge? = null
+
+    override fun create(
+        sampleRate: Int,
+        isStereo: Boolean,
+        echoCanceler: Boolean,
+        noiseSuppressor: Boolean
+    ): Boolean {
+        // 不需要提前检查，在 start 时创建
+        return true
+    }
+
+    override fun start(getMicrophoneData: GetMicrophoneData) {
+        val newBridge = RawAudioRecordWrapperBridge(
+            inputChannel = inputChannel,
+        ) { frame ->
+            getMicrophoneData.inputPCMData(frame.maybeMuted(isMuted))
+        }
+        val isStarted = newBridge.start(context, sampleRate, isStereo, echoCanceler)
+        if (!isStarted) {
+            throw IllegalArgumentException("Failed to create audio source")
+        }
+        bridge = newBridge
+    }
+
+    override fun stop() {
+        if (isRunning()) {
+            bridge?.stop()
+            bridge = null
+        }
+    }
+
+    override fun isRunning(): Boolean = bridge?.isRunning() ?: false
+
+    override fun release() = stop()
+
+    fun mute() {
+        isMuted = true
+    }
+
+    fun unMute() {
+        isMuted = false
+    }
+
+    private class RawAudioRecordWrapperBridge(
+        private val inputChannel: MultiChannelAudioRecord.Channel,
+        private val onNewFrameArrived: (frame: Frame) -> Unit
+    ) {
+
+        private var rawAudioRecordWrapper: RawAudioRecordWrapper? = null
+
+        @SuppressLint("MissingPermission")
+        fun start(
+            context: Context,
+            sampleRate: Int,
+            isStereo: Boolean,
+            isEchoCancelerEnabled: Boolean
+        ): Boolean {
+            val multiMicAwareSampleRate = when (sampleRate) {
+                16000 -> MultiChannelAudioRecord.SampleRate.SAMPLING_RATE_16000
+                32000 -> MultiChannelAudioRecord.SampleRate.SAMPLING_RATE_32000
+                48000 -> MultiChannelAudioRecord.SampleRate.SAMPLING_RATE_48000
+                else -> {
+                    Log.d(TAG, "Unsupported sample rate: $sampleRate")
+                    return false
+                }
+            }
+            val outputChannel = if (isStereo) {
+                RawAudioRecordWrapper.RawAudioOutputChannel.STEREO
+            } else {
+                RawAudioRecordWrapper.RawAudioOutputChannel.MONO
+            }
+            val rawAudioRecordWrapper = RawAudioRecordWrapper(
+                channel = inputChannel,
+                sampleRate = multiMicAwareSampleRate,
+                outputChannel = outputChannel
+            )
+            if (!rawAudioRecordWrapper.prepare(context)) {
+                Log.d(TAG, "Failed to prepare RawAudioRecordWrapper")
+                return false
+            }
+            val listener = object : RawAudioRecordWrapper.IRawAudioRecorder {
+                override fun onFailed(throwable: Throwable) {
+                    Log.d(TAG, "Failed to receive PCM data", throwable)
+                }
+
+                override fun onReceivedPcmData(pcmData: ByteArray) {
+                    val timeStamp = System.nanoTime() / 1000L
+                    onNewFrameArrived(Frame(pcmData, 0, pcmData.size, timeStamp))
+                }
+            }
+            this.rawAudioRecordWrapper = rawAudioRecordWrapper
+            rawAudioRecordWrapper.start(
+                callback = listener,
+                enableEchoCanceler = isEchoCancelerEnabled,
+                outputStream = null
+            )
+            return true
+        }
+
+        @SuppressLint("MissingPermission")
+        fun stop() {
+            rawAudioRecordWrapper?.stop()
+            rawAudioRecordWrapper = null
+        }
+
+        fun isRunning(): Boolean = rawAudioRecordWrapper != null
+
+        companion object {
+            private const val TAG = "RawAudioRecordWrapperBridge"
+        }
+    }
+
+    companion object {
+        private const val BUFFER_SIZE_IN_BYTES = 1920
+        private const val SAMPLING_RATE_MIN = 16000
+
+        private fun Frame.maybeMuted(isMuted: Boolean): Frame {
+            if (!isMuted) {
+                return this
+            }
+            return Frame(ByteArray(size), 0, size, timeStamp)
+        }
+    }
+}
+```
+
+---
+
+## ConfigHelper
+
+**文件**: `app/src/main/java/ai/fd/thinklet/app/squid/run/ConfigHelper.kt`
+
+配置助手类，提供便捷的方法来快速设置常用的配置组合。
 
 ```kotlin
 package ai.fd.thinklet.app.squid.run
@@ -1174,7 +1112,11 @@ object ConfigHelper {
 
 ---
 
-### `app/src/main/java/ai/fd/thinklet/app/squid/run/ConfigManager.kt`
+## ConfigManager
+
+**文件**: `app/src/main/java/ai/fd/thinklet/app/squid/run/ConfigManager.kt`
+
+配置管理器，用于管理应用的配置参数。
 
 ```kotlin
 package ai.fd.thinklet.app.squid.run
@@ -1317,7 +1259,11 @@ class ConfigManager(context: Context) {
 
 ---
 
-### `app/src/main/java/ai/fd/thinklet/app/squid/run/DefaultConfig.kt`
+## DefaultConfig
+
+**文件**: `app/src/main/java/ai/fd/thinklet/app/squid/run/DefaultConfig.kt`
+
+默认配置类，包含应用启动时使用的默认参数。
 
 ```kotlin
 package ai.fd.thinklet.app.squid.run
@@ -1372,7 +1318,11 @@ object DefaultConfig {
 
 ---
 
-### `app/src/main/java/ai/fd/thinklet/app/squid/run/PermissionHelper.kt`
+## PermissionHelper
+
+**文件**: `app/src/main/java/ai/fd/thinklet/app/squid/run/PermissionHelper.kt`
+
+权限管理助手类，用于请求和检查应用所需的权限。
 
 ```kotlin
 package ai.fd.thinklet.app.squid.run
@@ -1465,49 +1415,4 @@ class PermissionHelper(private val activity: Activity) {
     }
 }
 ```
-
----
-
-### `app/src/main/AndroidManifest.xml`
-
-```xml
-<?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android"
-    xmlns:tools="http://schemas.android.com/tools">
-
-    <uses-feature android:name="android.hardware.camera.any" />
-
-    <uses-permission android:name="android.permission.CAMERA" />
-    <uses-permission android:name="android.permission.RECORD_AUDIO" />
-    <uses-permission
-        android:name="android.permission.WRITE_EXTERNAL_STORAGE"
-        android:maxSdkVersion="28" />
-    <uses-permission android:name="android.permission.INTERNET" />
-    <uses-permission android:name="android.permission.VIBRATE" />
-
-    <application
-        android:allowBackup="true"
-        android:dataExtractionRules="@xml/data_extraction_rules"
-        android:fullBackupContent="@xml/backup_rules"
-        android:icon="@mipmap/ic_launcher"
-        android:label="@string/app_name"
-        android:roundIcon="@mipmap/ic_launcher_round"
-        android:supportsRtl="true"
-        android:theme="@style/Theme.Thinkletsquidrun"
-        android:usesCleartextTraffic="true"
-        tools:targetApi="31">
-        <activity
-            android:name=".MainActivity"
-            android:exported="true">
-            <intent-filter>
-                <action android:name="android.intent.action.MAIN" />
-
-                <category android:name="android.intent.category.LAUNCHER" />
-            </intent-filter>
-        </activity>
-    </application>
-
-</manifest>
-```
-
 

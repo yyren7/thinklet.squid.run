@@ -11,10 +11,11 @@ object DefaultConfig {
     const val DEFAULT_STREAM_KEY = "test_stream"
     
     // 视频配置
-    const val DEFAULT_LONG_SIDE = 720
-    const val DEFAULT_SHORT_SIDE = 480
+    const val DEFAULT_LONG_SIDE = 1920
+    const val DEFAULT_SHORT_SIDE = 1080
     const val DEFAULT_ORIENTATION = "landscape" // "landscape" 或 "portrait"
     const val DEFAULT_VIDEO_BITRATE = 4096 // kbps
+    const val DEFAULT_VIDEO_FPS = 24 // fps
     
     // 音频配置
     const val DEFAULT_AUDIO_SAMPLE_RATE = 48000 // Hz

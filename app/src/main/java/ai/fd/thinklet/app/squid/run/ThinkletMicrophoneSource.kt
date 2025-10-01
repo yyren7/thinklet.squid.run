@@ -7,7 +7,7 @@ import android.content.Context
 import android.util.Log
 import com.pedro.encoder.Frame
 import com.pedro.encoder.input.audio.GetMicrophoneData
-import com.pedro.library.util.sources.audio.AudioSource
+import com.pedro.encoder.input.sources.audio.AudioSource
 
 class ThinkletMicrophoneSource(
     private val context: Context,
@@ -18,13 +18,15 @@ class ThinkletMicrophoneSource(
 
     private var bridge: RawAudioRecordWrapperBridge? = null
 
-    // Note: No items that can be checked in advance.
     override fun create(
         sampleRate: Int,
         isStereo: Boolean,
         echoCanceler: Boolean,
         noiseSuppressor: Boolean
-    ): Boolean = true
+    ): Boolean {
+        // 不需要提前检查，在 start 时创建
+        return true
+    }
 
     override fun start(getMicrophoneData: GetMicrophoneData) {
         val newBridge = RawAudioRecordWrapperBridge(
@@ -49,11 +51,6 @@ class ThinkletMicrophoneSource(
     override fun isRunning(): Boolean = bridge?.isRunning() ?: false
 
     override fun release() = stop()
-
-    // Note: Copied from [MultiChannelAudioRecord.get].
-    override fun getMaxInputSize(): Int = BUFFER_SIZE_IN_BYTES * (sampleRate / SAMPLING_RATE_MIN)
-
-    override fun setMaxInputSize(size: Int) = Unit
 
     fun mute() {
         isMuted = true

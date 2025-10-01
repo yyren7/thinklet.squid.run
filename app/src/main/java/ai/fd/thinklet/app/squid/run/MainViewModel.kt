@@ -5,9 +5,12 @@ import ai.fd.thinklet.sdk.maintenance.camera.Angle
 import android.Manifest
 import android.app.Application
 import android.content.Context
+import android.content.SharedPreferences
 import android.content.pm.PackageManager
 import android.hardware.camera2.CameraManager
+import android.util.Log
 import android.os.Build
+import android.os.Environment
 import android.view.Surface
 import androidx.annotation.MainThread
 import androidx.core.content.ContextCompat
@@ -15,10 +18,13 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.viewModelScope
 import com.pedro.common.ConnectChecker
+import com.pedro.library.base.recording.RecordController
 import com.pedro.encoder.input.gl.render.filters.RotationFilterRender
+import com.pedro.encoder.utils.gl.GlUtil
 import com.pedro.library.generic.GenericStream
-import com.pedro.library.util.sources.audio.MicrophoneSource
-import com.pedro.library.util.sources.video.Camera2Source
+import com.pedro.encoder.input.sources.audio.AudioSource
+import com.pedro.encoder.input.sources.video.Camera2Source
+import com.pedro.encoder.input.video.CameraOpenException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.flow.Flow
@@ -30,8 +36,14 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.runningFold
 import kotlinx.coroutines.launch
+import java.io.File
+import java.text.SimpleDateFormat
 import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
+import java.util.Date
+import java.util.Locale
+import kotlinx.coroutines.delay
+import androidx.lifecycle.LifecycleOwner
 
 class MainViewModel(
     private val application: Application,
@@ -41,13 +53,33 @@ class MainViewModel(
     private val angle: Angle by lazy(LazyThreadSafetyMode.NONE, ::Angle)
 
     val streamUrl: String? = savedState.get<String>("streamUrl") ?: DefaultConfig.DEFAULT_STREAM_URL
-    val streamKey: String? = savedState.get<String>("streamKey") ?: DefaultConfig.DEFAULT_STREAM_KEY
+
+    /**
+     * The key for RTMP streaming.
+     */
+    private val _streamKey = MutableStateFlow<String?>(null)
+    val streamKey: StateFlow<String?> = _streamKey.asStateFlow()
+
+    private val sharedPreferences: SharedPreferences = application.getSharedPreferences("StreamConfig", Context.MODE_PRIVATE)
+
+    init {
+        _streamKey.value = sharedPreferences.getString("streamKey", null)
+            ?: savedState.get<String>("streamKey")
+            ?: DefaultConfig.DEFAULT_STREAM_KEY
+    }
+
+    fun updateStreamKey(newStreamKey: String) {
+        _streamKey.value = newStreamKey
+        sharedPreferences.edit().putString("streamKey", newStreamKey).apply()
+    }
+
     private val longSide: Int = savedState.get<Int>("longSide") ?: DefaultConfig.DEFAULT_LONG_SIDE
     private val shortSide: Int = savedState.get<Int>("shortSide") ?: DefaultConfig.DEFAULT_SHORT_SIDE
     private val orientation: Orientation? =
         Orientation.fromArgumentValue(savedState.get<String>("orientation") ?: DefaultConfig.DEFAULT_ORIENTATION)
     val videoBitrateBps: Int =
         savedState.get<Int>("videoBitrate")?.let { it * 1024 } ?: (DefaultConfig.DEFAULT_VIDEO_BITRATE * 1024)
+    val videoFps: Int = savedState.get<Int>("videoFps") ?: DefaultConfig.DEFAULT_VIDEO_FPS
     val audioSampleRateHz: Int =
         savedState.get<Int>("audioSampleRate") ?: DefaultConfig.DEFAULT_AUDIO_SAMPLE_RATE
     val audioBitrateBps: Int =
@@ -73,6 +105,9 @@ class MainViewModel(
     private val _isAudioMuted: MutableStateFlow<Boolean> = MutableStateFlow(false)
     val isAudioMuted: StateFlow<Boolean> = _isAudioMuted.asStateFlow()
 
+    private val _isRecording: MutableStateFlow<Boolean> = MutableStateFlow(false)
+    val isRecording: StateFlow<Boolean> = _isRecording.asStateFlow()
+
     private val streamingEventMutableSharedFlow: MutableSharedFlow<StreamingEvent> =
         MutableSharedFlow(replay = 10, onBufferOverflow = BufferOverflow.DROP_OLDEST)
 
@@ -96,7 +131,10 @@ class MainViewModel(
 
     private var startPreviewJob: Job? = null
 
+    private var wasStreamingBeforePause = false
+
     init {
+
         when (orientation) {
             Orientation.LANDSCAPE -> angle.setLandscape()
             Orientation.PORTRAIT -> angle.setPortrait()
@@ -115,9 +153,11 @@ class MainViewModel(
         return try {
             val cameraManager = application.getSystemService(Context.CAMERA_SERVICE) as CameraManager
             val cameraIds = cameraManager.cameraIdList
+            Log.i("MainViewModel", "发现 ${cameraIds.size} 个摄像头")
             cameraIds.isNotEmpty()
         } catch (e: Exception) {
             // 如果出现任何异常，认为相机不可用
+            Log.e("MainViewModel", "相机检查失败", e)
             streamingEventMutableSharedFlow.tryEmit(
                 StreamingEvent("相机检查失败: ${e.message}")
             )
@@ -127,102 +167,97 @@ class MainViewModel(
 
     @MainThread
     fun maybePrepareStreaming() {
-        if (streamUrl == null || streamKey == null || !isAllPermissionGranted() || _isPrepared.value) {
+        Log.d("MainViewModel", "maybePrepareStreaming called")
+        if (_isPrepared.value) {
+            return
+        }
+        if (streamUrl == null || streamKey.value == null || !isAllPermissionGranted()) {
             _isPrepared.value = false
             return
         }
 
-        // 检查相机是否可用（必需的硬件）
-        if (!isCameraAvailable()) {
-            streamingEventMutableSharedFlow.tryEmit(
-                StreamingEvent("错误: 未检测到可用的相机设备，无法进行直播")
-            )
-            _isPrepared.value = false
-            return
-        }
+        viewModelScope.launch {
+            try {
+                // Add a delay to give the camera service time to initialize on some devices.
+                delay(1000)
 
-        try {
-            val angle = Angle()
-            val camera2Source = Camera2Source(application)
-            val isInitiallyMuted = _isAudioMuted.value
-            val audioSource = when (micMode) {
-                MicMode.ANDROID -> createMicrophoneSource(isInitiallyMuted)
+                val angle = Angle()
+                val cameraSource = Camera2Source(application)
+                val isInitiallyMuted = _isAudioMuted.value
+                val audioSource = when (micMode) {
+                    MicMode.ANDROID -> createMicrophoneSource(isInitiallyMuted)
 
-                MicMode.THINKLET_5 -> createThinkletMicrophoneSource(
-                    application,
-                    MultiChannelAudioRecord.Channel.CHANNEL_FIVE,
-                    isInitiallyMuted
-                )
+                    MicMode.THINKLET_5 -> createThinkletMicrophoneSource(
+                        application,
+                        MultiChannelAudioRecord.Channel.CHANNEL_FIVE,
+                        isInitiallyMuted
+                    )
 
-                MicMode.THINKLET_6 -> createThinkletMicrophoneSource(
-                    application,
-                    MultiChannelAudioRecord.Channel.CHANNEL_SIX,
-                    isInitiallyMuted
-                )
-            }
-            val localStream = stream ?: GenericStream(
-                application,
-                ConnectionCheckerImpl(streamingEventMutableSharedFlow, _isStreaming, _connectionStatus),
-                camera2Source,
-                audioSource
-            ).apply {
-                getGlInterface().autoHandleOrientation = false
-                if (angle.isLandscape()) {
-                    val rotateFilterRender = RotationFilterRender().apply {
-                        this.rotation = 270
-                    }
-                    getGlInterface().addFilter(rotateFilterRender)
+                    MicMode.THINKLET_6 -> createThinkletMicrophoneSource(
+                        application,
+                        MultiChannelAudioRecord.Channel.CHANNEL_SIX,
+                        isInitiallyMuted
+                    )
                 }
-            }
-            val isPrepared = try {
-                // Note: The output size is converted by 90 degrees inside RootEncoder when the rotation
-                // is portrait. Therefore, we intentionally pass `longSide` and `shortSide` to `width`
-                // and `height` respectively so that it will be output at the correct size.
-                val isVideoPrepared = localStream.prepareVideo(
-                    width = longSide,
-                    height = shortSide,
-                    bitrate = videoBitrateBps,
-                    rotation = angle.current()
-                )
-                val isAudioPrepared = localStream.prepareAudio(
-                    sampleRate = audioSampleRateHz,
-                    isStereo = audioChannel == AudioChannel.STEREO,
-                    bitrate = audioBitrateBps,
-                    echoCanceler = isEchoCancelerEnabled
-                )
-                isVideoPrepared && isAudioPrepared
-            } catch (e: IllegalArgumentException) {
-                streamingEventMutableSharedFlow.tryEmit(
-                    StreamingEvent("直播参数设置失败: ${e.message}")
-                )
-                false
+                val localStream = stream ?: GenericStream(
+                    application,
+                    ConnectionCheckerImpl(streamingEventMutableSharedFlow, _isStreaming, _connectionStatus),
+                    cameraSource,
+                    audioSource
+                ).apply {
+                    getGlInterface().autoHandleOrientation = false
+                }
+                val isPrepared = try {
+                    // Note: The output size is converted by 90 degrees inside RootEncoder when the rotation
+                    // is portrait. Therefore, we intentionally pass `longSide` and `shortSide` to `width`
+                    // and `height` respectively so that it will be output at the correct size.
+                    val isVideoPrepared = localStream.prepareVideo(
+                        width = longSide,
+                        height = shortSide,
+                        fps = videoFps,
+                        bitrate = videoBitrateBps,
+                        rotation = getDeviceRotation()
+                    )
+                    val isAudioPrepared = localStream.prepareAudio(
+                        sampleRate = audioSampleRateHz,
+                        isStereo = audioChannel == AudioChannel.STEREO,
+                        bitrate = audioBitrateBps,
+                        echoCanceler = isEchoCancelerEnabled
+                    )
+                    isVideoPrepared && isAudioPrepared
+                } catch (e: IllegalArgumentException) {
+                    streamingEventMutableSharedFlow.tryEmit(
+                        StreamingEvent("直播参数设置失败: ${e.message}")
+                    )
+                    false
+                } catch (e: Exception) {
+                    streamingEventMutableSharedFlow.tryEmit(
+                        StreamingEvent("直播准备失败: ${e.message}")
+                    )
+                    false
+                }
+                
+                if (isPrepared) {
+                    stream = localStream
+                    _isPrepared.value = true
+                    streamingEventMutableSharedFlow.tryEmit(
+                        StreamingEvent("直播准备完成")
+                    )
+                } else {
+                    _isPrepared.value = false
+                }
             } catch (e: Exception) {
+                // 捕获相机初始化相关的所有异常
                 streamingEventMutableSharedFlow.tryEmit(
-                    StreamingEvent("直播准备失败: ${e.message}")
+                    StreamingEvent("相机初始化失败: ${e.message}")
                 )
-                false
-            }
-            
-            if (isPrepared) {
-                stream = localStream
-                _isPrepared.value = true
-                streamingEventMutableSharedFlow.tryEmit(
-                    StreamingEvent("直播准备完成")
-                )
-            } else {
                 _isPrepared.value = false
             }
-        } catch (e: Exception) {
-            // 捕获相机初始化相关的所有异常
-            streamingEventMutableSharedFlow.tryEmit(
-                StreamingEvent("相机初始化失败: ${e.message}")
-            )
-            _isPrepared.value = false
         }
     }
 
-    private fun createMicrophoneSource(isInitiallyMuted: Boolean): MicrophoneSource {
-        val microphoneSource = MicrophoneSource()
+    private fun createMicrophoneSource(isInitiallyMuted: Boolean): StandardMicrophoneSource {
+        val microphoneSource = StandardMicrophoneSource()
         if (isInitiallyMuted) {
             microphoneSource.mute()
         }
@@ -241,6 +276,27 @@ class MainViewModel(
         return microphoneSource
     }
 
+    fun activityOnPause() {
+        wasStreamingBeforePause = _isStreaming.value
+        stopStreaming()
+        stopPreview()
+        stream = null
+        _isPrepared.value = false
+    }
+
+    fun activityOnResume() {
+        // The preview will be restored by the SurfaceHolder.Callback,
+        // which will call maybePrepareStreaming -> startPreview.
+        // We only need to restore the streaming state.
+        if (wasStreamingBeforePause) {
+            viewModelScope.launch {
+                isPrepared.first { it }
+                maybeStartStreaming()
+            }
+            wasStreamingBeforePause = false
+        }
+    }
+
     fun maybeStartStreaming(): Boolean {
         val isStreamingStarted = maybeStartStreamingInternal()
         _isStreaming.value = isStreamingStarted
@@ -249,13 +305,13 @@ class MainViewModel(
 
     private fun maybeStartStreamingInternal(): Boolean {
         val streamSnapshot = stream
-        if (streamUrl == null || streamKey == null || streamSnapshot == null) {
+        if (streamUrl == null || streamKey.value == null || streamSnapshot == null) {
             return false
         }
         if (streamSnapshot.isStreaming) {
             return true
         }
-        streamSnapshot.startStream("$streamUrl/$streamKey")
+        streamSnapshot.startStream("$streamUrl/${streamKey.value}")
         return true
     }
 
@@ -268,16 +324,21 @@ class MainViewModel(
 
     @MainThread
     fun startPreview(surface: Surface, width: Int, height: Int) {
-        val localStream = stream ?: return
-        if (localStream.isOnPreview) {
-            localStream.stopPreview()
-        }
-
-        if (startPreviewJob != null) {
-            return
-        }
+        startPreviewJob?.cancel()
         startPreviewJob = viewModelScope.launch {
-            isPrepared.first { true }
+            // Wait until the stream is prepared before starting the preview.
+            isPrepared.first { it }
+
+            val localStream = stream
+            if (localStream == null) {
+                Log.e("MainViewModel", "Error: Stream is not available even after being prepared.")
+                return@launch
+            }
+
+            if (localStream.isOnPreview) {
+                localStream.stopPreview()
+            }
+            Log.i("MainViewModel", "Starting preview on surface.")
             localStream.startPreview(surface, width, height)
         }
     }
@@ -296,7 +357,7 @@ class MainViewModel(
         val audioSource = stream?.audioSource ?: return
         when (audioSource) {
             is ThinkletMicrophoneSource -> audioSource.mute()
-            is MicrophoneSource -> audioSource.mute()
+            is StandardMicrophoneSource -> audioSource.mute()
         }
     }
 
@@ -305,7 +366,107 @@ class MainViewModel(
         val audioSource = stream?.audioSource ?: return
         when (audioSource) {
             is ThinkletMicrophoneSource -> audioSource.unMute()
-            is MicrophoneSource -> audioSource.unMute()
+            is StandardMicrophoneSource -> audioSource.unMute()
+        }
+    }
+
+    /**
+     * 开始录制视频到本地文件
+     * 录制和直播共用同一个摄像头流，但输出到不同的目标
+     */
+    fun startRecording(): Boolean {
+        val streamSnapshot = stream
+        if (streamSnapshot == null || !_isPrepared.value) {
+            streamingEventMutableSharedFlow.tryEmit(
+                StreamingEvent("录制失败: 流未准备好")
+            )
+            return false
+        }
+
+        if (_isRecording.value) {
+            streamingEventMutableSharedFlow.tryEmit(
+                StreamingEvent("录制已在进行中")
+            )
+            return true
+        }
+
+        try {
+            // 生成录制文件路径
+            val recordFolder = File(
+                application.getExternalFilesDir(Environment.DIRECTORY_MOVIES),
+                "SquidRun"
+            )
+            if (!recordFolder.exists()) {
+                recordFolder.mkdirs()
+            }
+
+            val timestamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date())
+            val recordFile = File(recordFolder, "recording_$timestamp.mp4")
+            val recordPath = recordFile.absolutePath
+
+            // 开始录制
+            streamSnapshot.startRecord(
+                recordPath, 
+                null,  // RecordController.RecordTracks - 使用默认配置（录制音频和视频）
+                object : RecordController.Listener {
+                    override fun onStatusChange(status: RecordController.Status) {
+                        // 录制状态回调
+                        when (status) {
+                            RecordController.Status.STARTED -> {
+                                _isRecording.value = true
+                                streamingEventMutableSharedFlow.tryEmit(
+                                    StreamingEvent("录制已开始: $recordPath")
+                                )
+                            }
+                            RecordController.Status.STOPPED -> {
+                                _isRecording.value = false
+                                streamingEventMutableSharedFlow.tryEmit(
+                                    StreamingEvent("录制已停止: $recordPath")
+                                )
+                            }
+                            RecordController.Status.RECORDING -> {
+                                // 录制中
+                            }
+                            RecordController.Status.PAUSED -> {
+                                streamingEventMutableSharedFlow.tryEmit(
+                                    StreamingEvent("录制已暂停")
+                                )
+                            }
+                            RecordController.Status.RESUMED -> {
+                                streamingEventMutableSharedFlow.tryEmit(
+                                    StreamingEvent("录制已恢复")
+                                )
+                            }
+                            else -> {
+                                // 未知或未来的状态
+                            }
+                        }
+                    }
+                }
+            )
+            return true
+        } catch (e: Exception) {
+            streamingEventMutableSharedFlow.tryEmit(
+                StreamingEvent("录制启动失败: ${e.message}")
+            )
+            _isRecording.value = false
+            return false
+        }
+    }
+
+    /**
+     * 停止录制
+     */
+    fun stopRecording() {
+        val streamSnapshot = stream ?: return
+        try {
+            streamSnapshot.stopRecord()
+            // 状态会在回调中更新
+        } catch (e: Exception) {
+            streamingEventMutableSharedFlow.tryEmit(
+                StreamingEvent("停止录制失败: ${e.message}")
+            )
+            _isRecording.value = false
         }
     }
 
@@ -392,6 +553,10 @@ class MainViewModel(
             fun fromArgumentValue(value: String?): MicMode? =
                 entries.find { it.argumentValue == value }
         }
+    }
+
+    private fun getDeviceRotation(): Int {
+        return angle.current()
     }
 
     companion object {

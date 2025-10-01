@@ -21,9 +21,19 @@ import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.updateLayoutParams
 import androidx.lifecycle.flowWithLifecycle
 import androidx.lifecycle.lifecycleScope
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 
 class MainActivity : AppCompatActivity() {
+
+    private val viewModel: MainViewModel by viewModels()
+
+    private val statusReportingManager by lazy {
+        StatusReportingManager(
+            context = this,
+            streamUrl = viewModel.streamUrl
+        )
+    }
 
     private val binding: ActivityMainBinding by lazy(LazyThreadSafetyMode.NONE) {
         ActivityMainBinding.inflate(layoutInflater)
@@ -37,8 +47,6 @@ class MainActivity : AppCompatActivity() {
         PermissionHelper(this)
     }
 
-    private val viewModel: MainViewModel by viewModels()
-
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
@@ -50,8 +58,14 @@ class MainActivity : AppCompatActivity() {
             insets
         }
 
+        viewModel.updateStreamKey(statusReportingManager.deviceId)
+
         binding.streamUrl.text = viewModel.streamUrl
-        binding.streamKey.text = viewModel.streamKey
+        lifecycleScope.launch {
+            viewModel.streamKey.collectLatest { streamKey ->
+                binding.streamKey.setText(streamKey)
+            }
+        }
         binding.dimension.text =
             getString(R.string.dimension_text, viewModel.width, viewModel.height)
         binding.videoBitrate.text = (viewModel.videoBitrateBps / 1024).toString()
@@ -61,6 +75,22 @@ class MainActivity : AppCompatActivity() {
         binding.echoCanceler.text = viewModel.isEchoCancelerEnabled.toString()
         binding.micMode.text = viewModel.micMode.argumentValue
         binding.permissionGranted.text = permissionHelper.areAllPermissionsGranted().toString()
+
+        binding.buttonSaveStreamKey.setOnClickListener {
+            val newStreamKey = binding.streamKey.text.toString()
+            viewModel.updateStreamKey(newStreamKey)
+        }
+        binding.buttonSaveStreamKey.isEnabled = false
+
+        binding.streamKey.addTextChangedListener(object : android.text.TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
+
+            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}
+
+            override fun afterTextChanged(s: android.text.Editable?) {
+                binding.buttonSaveStreamKey.isEnabled = s.toString() != viewModel.streamKey.value
+            }
+        })
 
         if (viewModel.shouldShowPreview) {
             val previewBinding = PreviewBinding.bind(binding.previewStub.inflate())
@@ -75,7 +105,11 @@ class MainActivity : AppCompatActivity() {
                     format: Int,
                     width: Int,
                     height: Int
-                ) = viewModel.startPreview(holder.surface, width, height)
+                ) {
+                    // Surface is ready, now we can prepare the stream
+                    viewModel.maybePrepareStreaming()
+                    viewModel.startPreview(holder.surface, width, height)
+                }
 
                 override fun surfaceDestroyed(holder: SurfaceHolder) = viewModel.stopPreview()
             })
@@ -93,6 +127,7 @@ class MainActivity : AppCompatActivity() {
                 .flowWithLifecycle(lifecycle)
                 .collect {
                     binding.streamPrepared.text = it.toString()
+                    statusReportingManager.updateStreamingReadyStatus(it)
                 }
         }
         lifecycleScope.launch {
@@ -116,17 +151,42 @@ class MainActivity : AppCompatActivity() {
                     binding.audioMuted.text = it.toString()
                 }
         }
+        lifecycleScope.launch {
+            viewModel.isRecording
+                .flowWithLifecycle(lifecycle)
+                .collect { isRecording ->
+                    binding.recording.text = isRecording.toString()
+                    // 更新按钮文字
+                    binding.buttonRecord.text = if (isRecording) {
+                        getString(R.string.button_stop_recording)
+                    } else {
+                        getString(R.string.button_start_recording)
+                    }
+                }
+        }
+
+        // 设置录制按钮点击事件
+        binding.buttonRecord.setOnClickListener {
+            toggleRecording()
+        }
+
+        statusReportingManager.start()
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        statusReportingManager.stop()
     }
 
     override fun onResume() {
         super.onResume()
         checkAndRequestPermissions()
         maybeNotifyLaunchErrors()
-        viewModel.maybePrepareStreaming()
+        viewModel.activityOnResume()
     }
 
     override fun onPause() {
-        viewModel.stopStreaming()
+        viewModel.activityOnPause()
         super.onPause()
     }
 
@@ -135,7 +195,7 @@ class MainActivity : AppCompatActivity() {
             vibrator.vibrate(createStaccatoVibrationEffect(2))
             return
         }
-        if (viewModel.streamUrl == null || viewModel.streamKey == null) {
+        if (viewModel.streamUrl == null || viewModel.streamKey.value == null) {
             vibrator.vibrate(createStaccatoVibrationEffect(3))
             return
         }
@@ -174,6 +234,20 @@ class MainActivity : AppCompatActivity() {
         } else {
             viewModel.muteAudio()
             vibrator.vibrate(createStaccatoVibrationEffect(2))
+        }
+    }
+
+    private fun toggleRecording() {
+        if (viewModel.isRecording.value) {
+            viewModel.stopRecording()
+            vibrator.vibrate(createStaccatoVibrationEffect(2))
+        } else {
+            val isRecordingStarted = viewModel.startRecording()
+            if (isRecordingStarted) {
+                vibrator.vibrate(createStaccatoVibrationEffect(1))
+            } else {
+                vibrator.vibrate(createStaccatoVibrationEffect(3))
+            }
         }
     }
 

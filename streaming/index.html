@@ -2,78 +2,187 @@
 <html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
-    <title>低延迟直播 (HTTP-FLV)</title>
-    <script src="https://cdn.jsdelivr.net/npm/flv.js@latest"></script>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>设备监控仪表盘</title>
     <style>
-        body, html {
-            margin: 0;
-            padding: 0;
-            height: 100%;
-            display: flex;
-            flex-direction: column;
-            justify-content: center;
-            align-items: center;
-            background-color: #2c3e50;
-            font-family: 'Arial', sans-serif;
-            color: #ecf0f1;
-        }
-        h1 {
-            margin-bottom: 20px;
-        }
-        video {
-            width: 80%;
-            max-width: 960px;
-            background-color: #000;
-            border: 3px solid #3498db;
-            border-radius: 5px;
-        }
-        .info {
-            margin-top: 20px;
-            padding: 10px;
-            background-color: #34495e;
-            border-radius: 5px;
-            font-size: 0.9em;
-        }
-        code {
-            background-color: #2c3e50;
-            padding: 2px 5px;
-            border-radius: 3px;
-            color: #e67e22;
-        }
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; background-color: #f4f7f9; margin: 0; padding: 20px; color: #333; }
+        h1 { text-align: center; color: #1a237e; }
+        #device-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(350px, 1fr)); gap: 20px; }
+        .device-card { background-color: #fff; border-radius: 8px; box-shadow: 0 4px 8px rgba(0,0,0,0.1); overflow: hidden; transition: all 0.3s ease; border-left: 5px solid #ccc; }
+        .device-card.online { border-left-color: #4caf50; }
+        .device-card.offline { border-left-color: #f44336; }
+        .card-header { padding: 15px; background-color: #f5f5f5; border-bottom: 1px solid #eee; display: flex; justify-content: space-between; align-items: center; }
+        .device-id { font-weight: bold; font-size: 0.9em; color: #555; word-break: break-all; }
+        .status-badge { padding: 5px 10px; border-radius: 12px; font-size: 0.8em; color: #fff; }
+        .status-badge.online { background-color: #4caf50; }
+        .status-badge.offline { background-color: #f44336; }
+        .card-body { padding: 15px; }
+        .info-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; font-size: 0.9em; }
+        .info-item span { font-weight: bold; }
+        video { width: 100%; background-color: #000; }
+        .card-footer { padding: 10px 15px; background-color: #f5f5f5; text-align: right; border-top: 1px solid #eee; }
+        .delete-btn { background-color: #e53935; color: white; border: none; padding: 8px 15px; border-radius: 4px; cursor: pointer; transition: background-color 0.2s; font-size: 0.9em; }
+        .delete-btn:hover { background-color: #c62828; }
     </style>
+    <script src="https://cdn.jsdelivr.net/npm/flv.js@latest"></script>
 </head>
 <body>
-    <h1>SRS 低延迟直播 (HTTP-FLV)</h1>
-    <video id="videoElement" controls autoplay muted></video>
-    <div class="info">
-        <p>播放地址: <code id="streamUrl"></code></p>
-    </div>
+
+    <h1>设备监控仪表盘</h1>
+    <div id="device-grid"></div>
+
+    <template id="device-card-template">
+        <div class="device-card">
+            <div class="card-header">
+                <span class="device-id"></span>
+                <span class="status-badge"></span>
+            </div>
+            <video controls muted autoplay></video>
+            <div class="card-body">
+                <div class="info-grid">
+                    <div class="info-item">电池: <span class="batteryLevel">N/A</span>%</div>
+                    <div class="info-item">WiFi信号: <span class="wifiSignalStrength">N/A</span> dBm</div>
+                    <div class="info-item">准备推流: <span class="isStreamingReady">N/A</span></div>
+                    <div class="info-item">最后在线: <span class="lastSeen">N/A</span></div>
+                </div>
+            </div>
+            <div class="card-footer">
+                <button class="delete-btn">删除设备</button>
+            </div>
+        </div>
+    </template>
 
     <script>
-      const videoElement = document.getElementById('videoElement');
-      
-      // 注意: 请将 'localhost' 替换为你的电脑在局域网中的IP地址
-      // 安卓推流App和此页面需要在同一个局域网内
-      const hostIp = window.location.hostname || 'localhost';
-      const streamUrl = `http://${hostIp}:8080/thinklet.squid.run/test_stream.flv`;
+        document.addEventListener('DOMContentLoaded', () => {
+            const deviceGrid = document.getElementById('device-grid');
+            const cardTemplate = document.getElementById('device-card-template');
+            // 根据SRS配置，AppName为 thinklet.squid.run
+            const STREAM_BASE_URL = `http://${window.location.hostname}:8080/thinklet.squid.run`;
 
-      document.getElementById('streamUrl').textContent = streamUrl;
+            const flvPlayers = {}; // Store flv.js instances by deviceId
 
-      if (flvjs.isSupported()) {
-        const flvPlayer = flvjs.createPlayer({
-          type: 'flv',
-          isLive: true,
-          url: streamUrl
+            function createOrUpdateCard(device) {
+                let card = deviceGrid.querySelector(`#device-${device.id}`);
+                if (!card) {
+                    card = cardTemplate.content.cloneNode(true).firstElementChild;
+                    card.id = `device-${device.id}`;
+                    deviceGrid.appendChild(card);
+                    
+                    card.querySelector('.delete-btn').addEventListener('click', () => deleteDevice(device.id));
+                }
+
+                // Update common info
+                card.querySelector('.device-id').textContent = `ID: ${device.id}`;
+                const statusBadge = card.querySelector('.status-badge');
+                statusBadge.textContent = device.isOnline ? '在线' : '离线';
+                card.classList.toggle('online', device.isOnline);
+                card.classList.toggle('offline', !device.isOnline);
+                statusBadge.classList.toggle('online', device.isOnline);
+                statusBadge.classList.toggle('offline', !device.isOnline);
+
+                // Update status details
+                const status = device.status || {};
+                card.querySelector('.batteryLevel').textContent = status.batteryLevel !== undefined ? status.batteryLevel : 'N/A';
+                card.querySelector('.wifiSignalStrength').textContent = status.wifiSignalStrength !== undefined ? status.wifiSignalStrength : 'N/A';
+                card.querySelector('.isStreamingReady').textContent = status.isStreamingReady !== undefined ? status.isStreamingReady : 'N/A';
+                card.querySelector('.lastSeen').textContent = new Date(device.lastSeen).toLocaleString();
+                
+                // Handle video stream
+                const videoElement = card.querySelector('video');
+                const streamUrl = `${STREAM_BASE_URL}/${device.id}.flv`;
+
+                if (device.isOnline && device.status && device.status.isStreamingReady) {
+                    if (flvjs.isSupported()) {
+                        if (!flvPlayers[device.id]) {
+                            console.log(`创建播放器 for ${device.id} at ${streamUrl}`);
+                            const flvPlayer = flvjs.createPlayer({
+                                type: 'flv',
+                                isLive: true,
+                                url: streamUrl
+                            });
+                            flvPlayer.attachMediaElement(videoElement);
+                            flvPlayer.load();
+                            flvPlayer.play().catch(e => console.error(`播放失败 for ${device.id}:`, e));
+                            flvPlayers[device.id] = flvPlayer;
+                        }
+                    }
+                } else {
+                    if (flvPlayers[device.id]) {
+                        console.log(`销毁播放器 for ${device.id}`);
+                        flvPlayers[device.id].destroy();
+                        delete flvPlayers[device.id];
+                    }
+                }
+            }
+
+            async function deleteDevice(id) {
+                if (!confirm(`确定要删除设备 ${id} 吗？此操作不可逆。`)) return;
+
+                try {
+                    const response = await fetch('/delete-device', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ id })
+                    });
+                    const result = await response.json();
+                    if (result.success) {
+                        console.log(result.message);
+                        // The websocket broadcast will handle the UI removal
+                    } else {
+                        alert(`删除失败: ${result.message}`);
+                    }
+                } catch (error) {
+                    console.error('删除设备时出错:', error);
+                    alert('删除设备时出错，请检查服务器连接。');
+                }
+            }
+            
+            async function initializeDashboard() {
+                try {
+                    const response = await fetch('/devices');
+                    const devices = await response.json();
+                    devices.sort((a, b) => new Date(b.lastSeen) - new Date(a.lastSeen)); // Show most recent first
+                    devices.forEach(createOrUpdateCard);
+                } catch (error) {
+                    console.error('初始化仪表盘失败:', error);
+                }
+            }
+
+            function connectWebSocket() {
+                const ws = new WebSocket(`ws://${window.location.host}`);
+
+                ws.onmessage = (event) => {
+                    const data = JSON.parse(event.data);
+                    console.log('收到WebSocket消息:', data);
+
+                    if (data.type === 'deviceUpdate') {
+                        createOrUpdateCard(data.payload);
+                    } else if (data.type === 'deviceRemoved') {
+                        const card = deviceGrid.querySelector(`#device-${data.payload.id}`);
+                        if (card) {
+                            card.remove();
+                        }
+                        if (flvPlayers[data.payload.id]) {
+                            flvPlayers[data.payload.id].destroy();
+                            delete flvPlayers[data.payload.id];
+                        }
+                    }
+                };
+
+                ws.onclose = () => {
+                    console.log('WebSocket连接已断开，将在5秒后尝试重连...');
+                    setTimeout(connectWebSocket, 5000);
+                };
+
+                ws.onerror = (error) => {
+                    console.error('WebSocket 错误:', error);
+                    ws.close();
+                };
+            }
+
+            initializeDashboard();
+            connectWebSocket();
         });
-        flvPlayer.attachMediaElement(videoElement);
-        flvPlayer.load();
-        flvPlayer.play();
-      } else {
-        alert('您的浏览器不支持 flv.js');
-      }
     </script>
 </body>
 </html>
-
-
-

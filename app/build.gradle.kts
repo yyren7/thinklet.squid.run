@@ -21,6 +21,13 @@ android {
         viewBinding = true
     }
 
+    // 配置 packaging 选项以支持 16 KB 页面大小
+    packaging {
+        jniLibs {
+            useLegacyPackaging = false
+        }
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = false
@@ -43,6 +50,8 @@ dependencies {
 
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.appcompat)
+    implementation("com.squareup.okhttp3:okhttp:4.12.0")
+    implementation("com.google.code.gson:gson:2.10.1")
     implementation(libs.material)
     implementation(libs.androidx.activity)
     implementation(libs.androidx.fragment.ktx)
@@ -52,6 +61,7 @@ dependencies {
     implementation(libs.androidx.camera.lifecycle)
     implementation(libs.androidx.camera.extensions)
     implementation(libs.rootencoder)
+    implementation(libs.rootencoder.common)
     implementation(thinkletLibs.sdk.maintenance)
     implementation(thinkletLibs.sdk.audio)
     testImplementation(libs.junit)
