@@ -25,7 +25,7 @@ object DefaultConfig {
     const val DEFAULT_MIC_MODE = "android" // "android", "thinklet5", "thinklet6"
     
     // 其他配置
-    const val DEFAULT_PREVIEW = true // 是否显示预览（建议关闭以节省电量）
+    const val DEFAULT_PREVIEW = false // 是否显示预览（建议关闭以节省电量）
     
     /**
      * 获取所有默认配置的映射表

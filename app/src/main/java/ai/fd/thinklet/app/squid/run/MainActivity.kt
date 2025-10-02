@@ -2,6 +2,10 @@ package ai.fd.thinklet.app.squid.run
 
 import ai.fd.thinklet.app.squid.run.databinding.ActivityMainBinding
 import ai.fd.thinklet.app.squid.run.databinding.PreviewBinding
+import android.content.BroadcastReceiver
+import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.os.Bundle
 import android.os.VibrationEffect
@@ -21,6 +25,7 @@ import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.updateLayoutParams
 import androidx.lifecycle.flowWithLifecycle
 import androidx.lifecycle.lifecycleScope
+import androidx.localbroadcastmanager.content.LocalBroadcastManager
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 
@@ -47,6 +52,9 @@ class MainActivity : AppCompatActivity() {
         PermissionHelper(this)
     }
 
+    private var previewBinding: PreviewBinding? = null
+    private var isPreviewInflated = false
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
@@ -58,12 +66,15 @@ class MainActivity : AppCompatActivity() {
             insets
         }
 
-        viewModel.updateStreamKey(statusReportingManager.deviceId)
+        if (viewModel.streamKey.value.isNullOrBlank()) {
+            viewModel.updateStreamKey(statusReportingManager.deviceId)
+        }
 
         binding.streamUrl.text = viewModel.streamUrl
         lifecycleScope.launch {
             viewModel.streamKey.collectLatest { streamKey ->
                 binding.streamKey.setText(streamKey)
+                statusReportingManager.updateStreamKey(streamKey)
             }
         }
         binding.dimension.text =
@@ -92,27 +103,11 @@ class MainActivity : AppCompatActivity() {
             }
         })
 
+        // 如果默认显示预览，则初始化预览并显示
         if (viewModel.shouldShowPreview) {
-            val previewBinding = PreviewBinding.bind(binding.previewStub.inflate())
-            previewBinding.preview.updateLayoutParams<ConstraintLayout.LayoutParams> {
-                dimensionRatio = "${viewModel.width}:${viewModel.height}"
-            }
-            previewBinding.preview.holder.addCallback(object : SurfaceHolder.Callback {
-                override fun surfaceCreated(holder: SurfaceHolder) = Unit
-
-                override fun surfaceChanged(
-                    holder: SurfaceHolder,
-                    format: Int,
-                    width: Int,
-                    height: Int
-                ) {
-                    // Surface is ready, now we can prepare the stream
-                    viewModel.maybePrepareStreaming()
-                    viewModel.startPreview(holder.surface, width, height)
-                }
-
-                override fun surfaceDestroyed(holder: SurfaceHolder) = viewModel.stopPreview()
-            })
+            inflateAndSetupPreview()
+            // 显示预览（这会触发 surfaceChanged 并启动摄像头）
+            showPreview()
         }
 
         lifecycleScope.launch {
@@ -127,6 +122,12 @@ class MainActivity : AppCompatActivity() {
                 .flowWithLifecycle(lifecycle)
                 .collect {
                     binding.streamPrepared.text = it.toString()
+                }
+        }
+        lifecycleScope.launch {
+            viewModel.isReadyForStreaming
+                .flowWithLifecycle(lifecycle)
+                .collect {
                     statusReportingManager.updateStreamingReadyStatus(it)
                 }
         }
@@ -135,6 +136,7 @@ class MainActivity : AppCompatActivity() {
                 .flowWithLifecycle(lifecycle)
                 .collect {
                     binding.streaming.text = it.toString()
+                    statusReportingManager.updateStreamingStatus(it)
                 }
         }
         lifecycleScope.launch {
@@ -164,18 +166,42 @@ class MainActivity : AppCompatActivity() {
                     }
                 }
         }
+        lifecycleScope.launch {
+            viewModel.recordingDurationMs
+                .flowWithLifecycle(lifecycle)
+                .collect { durationMs ->
+                    statusReportingManager.updateRecordingStatus(
+                        viewModel.isRecording.value,
+                        durationMs
+                    )
+                }
+        }
+        lifecycleScope.launch {
+            viewModel.isPreviewActive
+                .flowWithLifecycle(lifecycle)
+                .collect { isActive ->
+                    binding.previewActive.text = isActive.toString()
+                }
+        }
 
         // 设置录制按钮点击事件
         binding.buttonRecord.setOnClickListener {
             toggleRecording()
         }
 
+        // 设置预览切换按钮点击事件
+        binding.buttonTogglePreview.setOnClickListener {
+            togglePreview()
+        }
+
         statusReportingManager.start()
+        LocalBroadcastManager.getInstance(this).registerReceiver(streamingControlReceiver, IntentFilter("streaming-control"))
     }
 
     override fun onDestroy() {
         super.onDestroy()
         statusReportingManager.stop()
+        LocalBroadcastManager.getInstance(this).unregisterReceiver(streamingControlReceiver)
     }
 
     override fun onResume() {
@@ -204,6 +230,9 @@ class MainActivity : AppCompatActivity() {
     override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
         when (keyCode) {
             KeyEvent.KEYCODE_CAMERA -> {
+                // The original physical button trigger logic is retained,
+                // but now it calls the unified `toggleStreaming` method,
+                // which is also used by the remote API.
                 toggleStreaming()
                 return true
             }
@@ -216,11 +245,33 @@ class MainActivity : AppCompatActivity() {
         return super.onKeyDown(keyCode, event)
     }
 
+    private val streamingControlReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            when (intent?.getStringExtra("action")) {
+                "start" -> {
+                    if (!viewModel.isStreaming.value) {
+                        viewModel.maybeStartStreaming { isStreamingStarted ->
+                            if (!isStreamingStarted) {
+                                vibrator.vibrate(createStaccatoVibrationEffect(2))
+                            }
+                        }
+                    }
+                }
+                "stop" -> {
+                    if (viewModel.isStreaming.value) {
+                        viewModel.stopStreaming()
+                    }
+                }
+            }
+        }
+    }
+
     private fun toggleStreaming() {
         if (!viewModel.isStreaming.value) {
-            val isStreamingStarted = viewModel.maybeStartStreaming()
-            if (!isStreamingStarted) {
-                vibrator.vibrate(createStaccatoVibrationEffect(2))
+            viewModel.maybeStartStreaming { isStreamingStarted ->
+                if (!isStreamingStarted) {
+                    vibrator.vibrate(createStaccatoVibrationEffect(2))
+                }
             }
         } else {
             viewModel.stopStreaming()
@@ -242,13 +293,92 @@ class MainActivity : AppCompatActivity() {
             viewModel.stopRecording()
             vibrator.vibrate(createStaccatoVibrationEffect(2))
         } else {
-            val isRecordingStarted = viewModel.startRecording()
-            if (isRecordingStarted) {
-                vibrator.vibrate(createStaccatoVibrationEffect(1))
-            } else {
-                vibrator.vibrate(createStaccatoVibrationEffect(3))
+            viewModel.startRecording { isRecordingStarted ->
+                if (isRecordingStarted) {
+                    vibrator.vibrate(createStaccatoVibrationEffect(1))
+                } else {
+                    vibrator.vibrate(createStaccatoVibrationEffect(3))
+                }
             }
         }
+    }
+
+    private fun togglePreview() {
+        if (viewModel.isPreviewActive.value) {
+            // 停止预览并隐藏窗口
+            hidePreview()
+            vibrator.vibrate(createStaccatoVibrationEffect(1))
+        } else {
+            // 显示预览窗口并启动预览
+            showPreview()
+            vibrator.vibrate(createStaccatoVibrationEffect(1))
+        }
+    }
+
+    private fun showPreview() {
+        // 如果还没有 inflate，先 inflate
+        if (!isPreviewInflated) {
+            inflateAndSetupPreview()
+        } else {
+            // 已经 inflate 过了，只需要显示并启动预览
+            previewBinding?.preview?.visibility = android.view.View.VISIBLE
+            // 重新启动预览（如果 Surface 已经存在）
+            previewBinding?.preview?.holder?.let { holder ->
+                holder.surface?.let { surface ->
+                    if (surface.isValid) {
+                        val surfaceFrame = holder.surfaceFrame
+                        viewModel.startPreview(surface, surfaceFrame.width(), surfaceFrame.height())
+                    }
+                }
+            }
+        }
+    }
+
+    private fun hidePreview() {
+        // 先停止预览，再隐藏 Surface
+        viewModel.stopPreview()
+        // 使用 postDelayed 给渲染线程足够时间停止
+        // 100ms 通常足够 GL 线程停止渲染
+        previewBinding?.preview?.postDelayed({
+            previewBinding?.preview?.visibility = android.view.View.GONE
+        }, 100)
+    }
+
+    private fun inflateAndSetupPreview() {
+        if (isPreviewInflated) return
+        
+        val localPreviewBinding = PreviewBinding.bind(binding.previewStub.inflate())
+        previewBinding = localPreviewBinding
+        isPreviewInflated = true
+        
+        localPreviewBinding.preview.updateLayoutParams<ConstraintLayout.LayoutParams> {
+            dimensionRatio = "${viewModel.width}:${viewModel.height}"
+        }
+        
+        localPreviewBinding.preview.holder.addCallback(object : SurfaceHolder.Callback {
+            override fun surfaceCreated(holder: SurfaceHolder) = Unit
+
+            override fun surfaceChanged(
+                holder: SurfaceHolder,
+                format: Int,
+                width: Int,
+                height: Int
+            ) {
+                // Surface is ready, now we can start the preview
+                // 只有在可见状态下才启动预览
+                if (localPreviewBinding.preview.visibility == android.view.View.VISIBLE) {
+                    viewModel.startPreview(holder.surface, width, height)
+                }
+            }
+
+            override fun surfaceDestroyed(holder: SurfaceHolder) {
+                // Surface 被系统销毁时（例如 Activity 切换），确保停止预览
+                // 注意：hidePreview() 已经调用过 stopPreview()，这里主要处理系统触发的销毁
+                if (localPreviewBinding.preview.visibility == android.view.View.VISIBLE) {
+                    viewModel.stopPreview()
+                }
+            }
+        })
     }
 
     private fun checkAndRequestPermissions() {
@@ -295,7 +425,7 @@ class MainActivity : AppCompatActivity() {
             if (grantResults.isNotEmpty() && grantResults.all { it == PackageManager.PERMISSION_GRANTED }) {
                 // 所有权限都已授予
                 binding.permissionGranted.text = "true"
-                viewModel.maybePrepareStreaming()
+                // 不自动初始化摄像头，等待用户主动操作（推流/录像/预览）
             } else {
                 // 有权限被拒绝
                 binding.permissionGranted.text = "false"
