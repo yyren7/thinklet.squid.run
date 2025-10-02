@@ -19,14 +19,14 @@ try {
         Object.values(devices).forEach(device => device.isOnline = false);
     }
 } catch (err) {
-    console.error('❌ 读取 devices.json 文件失败:', err);
+    console.error('❌ Failed to read devices.json:', err);
 }
 
 function saveDevicesToFile() {
     try {
         fs.writeFileSync(DEVICES_FILE, JSON.stringify(devices, null, 4));
     } catch (err)        {
-        console.error('❌ 写入 devices.json 文件失败:', err);
+        console.error('❌ Failed to write to devices.json:', err);
     }
 }
 
@@ -74,14 +74,51 @@ const server = http.createServer((req, res) => {
                     saveDevicesToFile();
                     broadcast({ type: 'deviceRemoved', payload: { id } });
                     res.writeHead(200, { 'Content-Type': 'application/json' });
-                    res.end(JSON.stringify({ success: true, message: `设备 ${id} 已删除` }));
+                    res.end(JSON.stringify({ success: true, message: `Device ${id} deleted` }));
                 } else {
                     res.writeHead(404, { 'Content-Type': 'application/json' });
-                    res.end(JSON.stringify({ success: false, message: '未找到设备' }));
+                    res.end(JSON.stringify({ success: false, message: 'Device not found' }));
                 }
             } catch (e) {
                 res.writeHead(400, { 'Content-Type': 'application/json' });
-                res.end(JSON.stringify({ success: false, message: '错误的请求' }));
+                res.end(JSON.stringify({ success: false, message: 'Bad request' }));
+            }
+        });
+        return;
+    }
+
+    // API endpoints for stream control
+    if ((pathname === '/start-stream' || pathname === '/stop-stream') && req.method === 'POST') {
+        let body = '';
+        req.on('data', chunk => {
+            body += chunk.toString();
+        });
+        req.on('end', () => {
+            try {
+                const { id } = JSON.parse(body);
+                const action = pathname === '/start-stream' ? 'startStream' : 'stopStream';
+                const command = { command: action };
+
+                let deviceWs = null;
+                wss.clients.forEach(client => {
+                    if (client.deviceId === id && client.readyState === WebSocket.OPEN) {
+                        deviceWs = client;
+                    }
+                });
+
+                if (deviceWs) {
+                    deviceWs.send(JSON.stringify(command));
+                    console.log(`🚀 Sent '${action}' command to device ${id}`);
+                    res.writeHead(200, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({ success: true, message: `Command ${action} sent to device ${id}` }));
+                } else {
+                    console.log(`⚠️ Device ${id} not connected or not found.`);
+                    res.writeHead(404, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({ success: false, message: 'Device not connected' }));
+                }
+            } catch (e) {
+                res.writeHead(400, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ success: false, message: 'Bad request' }));
             }
         });
         return;
@@ -126,7 +163,7 @@ function broadcast(data) {
 }
 
 wss.on('connection', ws => {
-    console.log('✅ WebSocket 客户端已连接');
+    console.log('✅ WebSocket client connected');
     let deviceId = null;
 
     ws.on('message', message => {
@@ -137,7 +174,7 @@ wss.on('connection', ws => {
                 deviceId = data.id;
                 ws.deviceId = deviceId; // Attach deviceId to the ws connection for later use
 
-                console.log(`📥 收到来自设备 ${deviceId} 的状态更新`);
+                console.log(`📥 Received status update from device ${deviceId}`);
 
                 devices[deviceId] = {
                     ...(devices[deviceId] || {}),
@@ -149,28 +186,31 @@ wss.on('connection', ws => {
                 
                 saveDevicesToFile();
                 broadcast({ type: 'deviceUpdate', payload: devices[deviceId] });
+            } else if (data.command === 'getDevices') {
+                // This is a request from a web client to get the initial list of devices
+                ws.send(JSON.stringify({ type: 'deviceList', payload: Object.values(devices) }));
             }
         } catch (e) {
-            console.error('解析消息失败:', e);
+            console.error('Failed to parse message:', e);
             // Not a JSON message, might be the old "hello" or from web client
-            console.log('📥 收到非JSON格式消息:', message.toString());
+            console.log('📥 Received non-JSON message:', message.toString());
         }
     });
 
     ws.on('close', () => {
-        console.log('🔌 WebSocket 客户端已断开');
+        console.log('🔌 WebSocket client disconnected');
         if (ws.deviceId && devices[ws.deviceId]) {
             devices[ws.deviceId].isOnline = false;
             saveDevicesToFile();
             broadcast({ type: 'deviceUpdate', payload: devices[ws.deviceId] });
-            console.log(` marcado 设备 ${ws.deviceId} 为离线`);
+            console.log(`Device ${ws.deviceId} marked as offline`);
         }
     });
 });
 
 server.listen(PORT, () => {
-    console.log(`✅ HTTP服务器已启动，正在监听 ${PORT} 端口`);
-    console.log(`🔗 请在浏览器中打开 http://localhost:${PORT}`);
+    console.log(`✅ HTTP server started on port ${PORT}`);
+    console.log(`🔗 Open http://localhost:${PORT} in your browser`);
 });
 
 
