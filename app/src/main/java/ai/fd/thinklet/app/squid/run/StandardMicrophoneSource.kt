@@ -8,7 +8,7 @@ import com.pedro.encoder.input.audio.GetMicrophoneData
 import com.pedro.encoder.input.sources.audio.AudioSource
 
 /**
- * 标准麦克风音频源，支持静音功能
+ * Standard microphone audio source with mute functionality.
  */
 class StandardMicrophoneSource(
     private val audioSourceType: Int = MediaRecorder.AudioSource.DEFAULT
@@ -60,7 +60,7 @@ class StandardMicrophoneSource(
                 val read = record.read(buffer, 0, buffer.size)
                 if (read > 0) {
                     val data = if (isMuted) {
-                        ByteArray(read) // 静音数据（全0）
+                        ByteArray(read) // Muted data (all zeros)
                     } else {
                         buffer.copyOf(read)
                     }

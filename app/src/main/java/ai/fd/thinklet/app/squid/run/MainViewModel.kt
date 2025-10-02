@@ -111,11 +111,11 @@ class MainViewModel(
     private val _isRecording: MutableStateFlow<Boolean> = MutableStateFlow(false)
     val isRecording: StateFlow<Boolean> = _isRecording.asStateFlow()
 
-    private val _recordingDurationMs: MutableStateFlow<Long> = MutableStateFlow(0L)
-    val recordingDurationMs: StateFlow<Long> = _recordingDurationMs.asStateFlow()
-
-    private var recordingStartTime: Long = 0L
-    private var recordingDurationJob: Job? = null
+    // Recording duration is now calculated on the frontend, not needed here
+    // private val _recordingDurationMs: MutableStateFlow<Long> = MutableStateFlow(0L)
+    // val recordingDurationMs: StateFlow<Long> = _recordingDurationMs.asStateFlow()
+    // private var recordingStartTime: Long = 0L
+    // private var recordingDurationJob: Job? = null
 
     private val _isPreviewActive: MutableStateFlow<Boolean> = MutableStateFlow(false)
     val isPreviewActive: StateFlow<Boolean> = _isPreviewActive.asStateFlow()
@@ -151,7 +151,6 @@ class MainViewModel(
 
     private var startPreviewJob: Job? = null
 
-    private var wasStreamingBeforePause = false
 
     init {
 
@@ -167,19 +166,19 @@ class MainViewModel(
     }
 
     /**
-     * 检查设备是否有可用的相机
+     * Check if the device has an available camera.
      */
     private fun isCameraAvailable(): Boolean {
         return try {
             val cameraManager = application.getSystemService(Context.CAMERA_SERVICE) as CameraManager
             val cameraIds = cameraManager.cameraIdList
-            Log.i("MainViewModel", "发现 ${cameraIds.size} 个摄像头")
+            Log.i("MainViewModel", "Found ${cameraIds.size} cameras")
             cameraIds.isNotEmpty()
         } catch (e: Exception) {
-            // 如果出现任何异常，认为相机不可用
-            Log.e("MainViewModel", "相机检查失败", e)
+            // If any exception occurs, assume the camera is unavailable.
+            Log.e("MainViewModel", "Camera check failed", e)
             streamingEventMutableSharedFlow.tryEmit(
-                StreamingEvent("相机检查失败: ${e.message}")
+                StreamingEvent("Camera check failed: ${e.message}")
             )
             false
         }
@@ -201,7 +200,7 @@ class MainViewModel(
             delay(1000)
 
             streamingEventMutableSharedFlow.tryEmit(
-                StreamingEvent("摄像机资源被启用")
+                StreamingEvent("Camera resource is being enabled")
             )
 
             val cameraSource = Camera2Source(application)
@@ -249,12 +248,12 @@ class MainViewModel(
                 isVideoPrepared && isAudioPrepared
             } catch (e: IllegalArgumentException) {
                 streamingEventMutableSharedFlow.tryEmit(
-                    StreamingEvent("直播参数设置失败: ${e.message}")
+                    StreamingEvent("Failed to set streaming parameters: ${e.message}")
                 )
                 false
             } catch (e: Exception) {
                 streamingEventMutableSharedFlow.tryEmit(
-                    StreamingEvent("相机视频流准备失败: ${e.message}")
+                    StreamingEvent("Failed to prepare camera video stream: ${e.message}")
                 )
                 false
             }
@@ -263,22 +262,23 @@ class MainViewModel(
                 stream = localStream
                 _isPrepared.value = true
                 streamingEventMutableSharedFlow.tryEmit(
-                    StreamingEvent("摄像机资源已正常启动")
+                    StreamingEvent("Camera resource has been started successfully")
                 )
                 streamingEventMutableSharedFlow.tryEmit(
-                    StreamingEvent("相机视频流准备完成")
+                    StreamingEvent("Camera video stream is ready")
                 )
             } else {
                 _isPrepared.value = false
             }
         } catch (e: CancellationException) {
-            // 协程被取消是正常行为，不需要报错，直接重新抛出让协程框架处理
-            Log.d("MainViewModel", "摄像头准备被取消")
+            // Coroutine cancellation is a normal behavior, no need to report an error.
+            // Re-throw it to be handled by the coroutine framework.
+            Log.d("MainViewModel", "Camera preparation was cancelled")
             throw e
         } catch (e: Exception) {
-            // 捕获相机初始化相关的所有异常
+            // Catch all exceptions related to camera initialization.
             streamingEventMutableSharedFlow.tryEmit(
-                StreamingEvent("相机初始化失败: ${e.message}")
+                StreamingEvent("Camera initialization failed: ${e.message}")
             )
             _isPrepared.value = false
         }
@@ -305,7 +305,16 @@ class MainViewModel(
     }
 
     fun activityOnPause() {
-        wasStreamingBeforePause = _isStreaming.value
+        // 如果正在录制或推流，保持所有资源（相机、录制、推流）
+        if (_isRecording.value || _isStreaming.value) {
+            Log.w("MainViewModel", "Recording or streaming in progress, keeping all resources active")
+            // 停止预览以节省资源，但保持相机、录制和推流
+            // checkAndReleaseCamera() 会检查录制和推流状态，不会释放相机
+            stopPreview()
+            return
+        }
+        
+        // 如果没有在录制或推流，正常清理所有资源
         stopStreaming()
         stopPreview()
         stream = null
@@ -313,24 +322,17 @@ class MainViewModel(
     }
 
     fun activityOnResume() {
-        // The preview will be restored by the SurfaceHolder.Callback,
-        // which will call maybePrepareStreaming -> startPreview.
-        // We only need to restore the streaming state.
-        if (wasStreamingBeforePause) {
-            viewModelScope.launch {
-                isPrepared.first { it }
-                maybeStartStreaming()
-            }
-            wasStreamingBeforePause = false
-        }
+        // 如果正在录制或推流，它们的资源一直保持着，不需要恢复
+        // 预览会由 SurfaceHolder.Callback 自动恢复，
+        // 它会调用 maybePrepareStreaming -> startPreview
     }
 
     /**
-     * 启动推流
-     * 如果摄像头未准备好，会先自动初始化
+     * Start streaming.
+     * If the camera is not ready, it will be initialized automatically.
      */
     fun maybeStartStreaming(onResult: ((Boolean) -> Unit)? = null) {
-        // 确保摄像头已准备好
+        // Ensure the camera is ready
         ensureCameraReady {
             val isStreamingStarted = maybeStartStreamingInternal()
             _isStreaming.value = isStreamingStarted
@@ -343,22 +345,37 @@ class MainViewModel(
         if (streamUrl == null || streamKey.value == null || streamSnapshot == null) {
             return false
         }
+        
+        // If already streaming, return success directly.
         if (streamSnapshot.isStreaming) {
             return true
         }
+        
+        // If the previous connection failed or was in an error state, clean up the underlying state first.
+        if (_connectionStatus.value == ConnectionStatus.FAILED || 
+            _connectionStatus.value == ConnectionStatus.DISCONNECTED) {
+            Log.d("MainViewModel", "Detected previous connection error state, cleaning up underlying stream state first")
+            try {
+                streamSnapshot.stopStream()
+            } catch (e: Exception) {
+                Log.w("MainViewModel", "Exception occurred while cleaning up old state: ${e.message}")
+            }
+            _connectionStatus.value = ConnectionStatus.IDLE
+        }
+        
         streamSnapshot.startStream("$streamUrl/${streamKey.value}")
         return true
     }
     
     /**
-     * 同步版本的启动推流（兼容旧代码）
-     * 仅在摄像头已准备好时才能成功
+     * Synchronous version of start streaming (for compatibility with old code).
+     * Succeeds only if the camera is already prepared.
      */
     fun maybeStartStreamingSync(): Boolean {
         if (!_isPrepared.value) {
-            Log.w("MainViewModel", "摄像头未准备好")
+            Log.w("MainViewModel", "Camera is not ready")
             streamingEventMutableSharedFlow.tryEmit(
-                StreamingEvent("推流失败: 摄像头未准备好")
+                StreamingEvent("Streaming failed: Camera is not ready")
             )
             return false
         }
@@ -373,7 +390,7 @@ class MainViewModel(
         streamSnapshot.stopStream()
         _isStreaming.value = false
         _connectionStatus.value = ConnectionStatus.IDLE
-        // 检查是否需要释放摄像头资源
+        // Check if camera resources need to be released
         checkAndReleaseCamera()
     }
 
@@ -381,9 +398,9 @@ class MainViewModel(
     fun startPreview(surface: Surface, width: Int, height: Int) {
         startPreviewJob?.cancel()
         startPreviewJob = viewModelScope.launch {
-            // 确保摄像头已准备好
+            // Ensure the camera is ready
             if (!_isPrepared.value) {
-                Log.i("MainViewModel", "预览启动: 摄像头未准备，正在初始化...")
+                Log.i("MainViewModel", "Starting preview: Camera not ready, initializing...")
                 maybePrepareStreaming()
             }
             
@@ -413,17 +430,17 @@ class MainViewModel(
             try {
                 localStream.stopPreview()
                 _isPreviewActive.value = false
-                Log.d("MainViewModel", "预览已停止")
+                Log.d("MainViewModel", "Preview has been stopped")
             } catch (e: Exception) {
-                // 捕获 Surface 已销毁等异常
-                Log.w("MainViewModel", "停止预览时出现异常（可能 Surface 已销毁）: ${e.message}")
+                // Catch exceptions like Surface being destroyed.
+                Log.w("MainViewModel", "Exception occurred while stopping preview (Surface might be destroyed): ${e.message}")
                 _isPreviewActive.value = false
             }
         } else {
-            // 即使预览未激活，也确保状态正确
+            // Even if the preview is not active, ensure the state is correct.
             _isPreviewActive.value = false
         }
-        // 检查是否需要释放摄像头资源
+        // Check if camera resources need to be released
         checkAndReleaseCamera()
     }
 
@@ -446,12 +463,12 @@ class MainViewModel(
     }
 
     /**
-     * 开始录制视频到本地文件
-     * 录制和直播共用同一个摄像头流，但输出到不同的目标
-     * 如果摄像头未准备好，会先自动初始化
+     * Start recording video to a local file.
+     * Recording and streaming share the same camera stream but output to different destinations.
+     * If the camera is not ready, it will be initialized automatically.
      */
     fun startRecording(onResult: ((Boolean) -> Unit)? = null) {
-        // 确保摄像头已准备好
+        // Ensure the camera is ready
         ensureCameraReady {
             val result = startRecordingInternal()
             onResult?.invoke(result)
@@ -462,20 +479,20 @@ class MainViewModel(
         val streamSnapshot = stream
         if (streamSnapshot == null) {
             streamingEventMutableSharedFlow.tryEmit(
-                StreamingEvent("录制失败: 流未准备好")
+                StreamingEvent("Recording failed: Stream not ready")
             )
             return false
         }
 
         if (_isRecording.value) {
             streamingEventMutableSharedFlow.tryEmit(
-                StreamingEvent("录制已在进行中")
+                StreamingEvent("Recording is already in progress")
             )
             return true
         }
 
         try {
-            // 生成录制文件路径
+            // Generate recording file path
             val recordFolder = File(
                 application.getExternalFilesDir(Environment.DIRECTORY_MOVIES),
                 "SquidRun"
@@ -488,44 +505,78 @@ class MainViewModel(
             val recordFile = File(recordFolder, "recording_$timestamp.mp4")
             val recordPath = recordFile.absolutePath
 
-            // 开始录制
+            // Start recording
             streamSnapshot.startRecord(
                 recordPath, 
-                null,  // RecordController.RecordTracks - 使用默认配置（录制音频和视频）
+                null,  // RecordController.RecordTracks - use default configuration (record audio and video)
                 object : RecordController.Listener {
                     override fun onStatusChange(status: RecordController.Status) {
-                        // 录制状态回调
+                        // Recording status callback
                         when (status) {
                             RecordController.Status.STARTED -> {
                                 _isRecording.value = true
-                                recordingStartTime = System.currentTimeMillis()
-                                startRecordingDurationTimer()
+                                // Duration timer removed - frontend now handles timing
+                                // recordingStartTime = System.currentTimeMillis()
+                                // startRecordingDurationTimer()
                                 streamingEventMutableSharedFlow.tryEmit(
-                                    StreamingEvent("录制已开始: $recordPath")
+                                    StreamingEvent("Recording started: $recordPath")
                                 )
                             }
                             RecordController.Status.STOPPED -> {
                                 _isRecording.value = false
-                                stopRecordingDurationTimer()
+                                // Duration timer removed - frontend now handles timing
+                                // stopRecordingDurationTimer()
                                 streamingEventMutableSharedFlow.tryEmit(
-                                    StreamingEvent("录制已停止: $recordPath")
+                                    StreamingEvent("Recording stopped: $recordPath")
                                 )
+                                
+                                // 在录制停止后计算并保存 MD5
+                                // 关键：延迟执行，确保底层 MediaMuxer 完全将数据刷新到磁盘
+                                viewModelScope.launch {
+                                    try {
+                                        // 等待 1 秒，确保文件完全写入磁盘
+                                        // MediaMuxer 和文件系统可能需要时间来完成最后的写入操作
+                                        delay(1000)
+                                        
+                                        // 验证文件是否存在且大小合理
+                                        if (!recordFile.exists()) {
+                                            Log.e("MainViewModel", "Recording file does not exist: ${recordFile.name}")
+                                            return@launch
+                                        }
+                                        
+                                        val fileSize = recordFile.length()
+                                        if (fileSize < 1024) { // 文件小于 1KB，可能有问题
+                                            Log.w("MainViewModel", "Recording file size is too small (${fileSize} bytes): ${recordFile.name}")
+                                            // 即使文件很小，也继续计算 MD5，但记录警告
+                                        }
+                                        
+                                        Log.i("MainViewModel", "Starting MD5 calculation for file: ${recordFile.name} (${fileSize} bytes)")
+                                        val success = MD5Utils.calculateAndSaveMD5(recordFile)
+                                        if (success) {
+                                            Log.i("MainViewModel", "MD5 file created successfully for: ${recordFile.name}")
+                                        } else {
+                                            Log.w("MainViewModel", "Failed to create MD5 file for: ${recordFile.name}")
+                                        }
+                                    } catch (e: Exception) {
+                                        Log.e("MainViewModel", "Error while creating MD5 file for: ${recordFile.name}", e)
+                                    }
+                                }
                             }
                             RecordController.Status.RECORDING -> {
-                                // 录制中
+                                // Recording in progress
                             }
                             RecordController.Status.PAUSED -> {
                                 streamingEventMutableSharedFlow.tryEmit(
-                                    StreamingEvent("录制已暂停")
+                                    StreamingEvent("Recording paused")
                                 )
                             }
                             RecordController.Status.RESUMED -> {
                                 streamingEventMutableSharedFlow.tryEmit(
-                                    StreamingEvent("录制已恢复")
+                                    StreamingEvent("Recording resumed")
                                 )
                             }
                             else -> {
-                                // 未知或未来的状态
+                                // Unknown or future status
                             }
                         }
                     }
@@ -534,7 +585,7 @@ class MainViewModel(
             return true
         } catch (e: Exception) {
             streamingEventMutableSharedFlow.tryEmit(
-                StreamingEvent("录制启动失败: ${e.message}")
+                StreamingEvent("Failed to start recording: ${e.message}")
             )
             _isRecording.value = false
             return false
@@ -542,24 +593,41 @@ class MainViewModel(
     }
 
     /**
-     * 停止录制
+     * Stop recording.
      */
     fun stopRecording() {
-        val streamSnapshot = stream ?: return
+        val streamSnapshot = stream ?: run {
+            Log.w("MainViewModel", "Cannot stop recording: stream is null")
+            _isRecording.value = false
+            return
+        }
+        
+        if (!_isRecording.value) {
+            Log.w("MainViewModel", "Recording is not active")
+            return
+        }
+        
         try {
+            Log.i("MainViewModel", "Stopping recording...")
             streamSnapshot.stopRecord()
-            // 状态会在回调中更新
-            // 检查是否需要释放摄像头资源
+            // The status will be updated in the callback.
+            // 延迟检查相机资源释放，给录制停止回调足够的时间来完成 MD5 计算
             viewModelScope.launch {
-                delay(100) // 等待状态更新
+                // 等待更长时间，确保 MD5 计算完成
+                delay(2000) // 等待 2 秒：100ms 状态更新 + 1000ms MD5 延迟 + 额外缓冲
                 checkAndReleaseCamera()
             }
         } catch (e: Exception) {
+            Log.e("MainViewModel", "Failed to stop recording", e)
             streamingEventMutableSharedFlow.tryEmit(
-                StreamingEvent("停止录制失败: ${e.message}")
+                StreamingEvent("Failed to stop recording: ${e.message}")
             )
             _isRecording.value = false
-            checkAndReleaseCamera()
+            // 即使失败，也延迟一下再检查资源释放
+            viewModelScope.launch {
+                delay(500)
+                checkAndReleaseCamera()
+            }
         }
     }
 
@@ -598,6 +666,7 @@ class MainViewModel(
             streamingEventMutableSharedFlow.tryEmit(StreamingEvent("onDisconnect"))
             isStreamingFlow.tryEmit(false)
             connectionStatusFlow.tryEmit(ConnectionStatus.DISCONNECTED)
+            // Note: The underlying stream state is cleaned up by the user actively calling stopStreaming() or before the next startStream.
         }
 
         override fun onNewBitrate(bitrate: Long) {
@@ -653,39 +722,62 @@ class MainViewModel(
     }
 
     /**
-     * 检查是否需要释放摄像头资源
-     * 当推流、录像、预览三个功能都关闭时，完全释放摄像头以节省电量
+     * Check if camera resources need to be released.
+     * When streaming, recording, and preview are all turned off, completely release the camera to save power.
      */
     private fun checkAndReleaseCamera() {
         val shouldRelease = !_isStreaming.value && !_isRecording.value && !_isPreviewActive.value
         if (shouldRelease) {
-            Log.i("MainViewModel", "所有功能已关闭，释放摄像头资源以节省电量")
+            Log.i("MainViewModel", "All features are off, releasing camera resources to save power")
             releaseCamera()
         }
     }
 
     /**
-     * 完全释放摄像头和编码器资源
+     * Completely release camera and encoder resources.
      */
     private fun releaseCamera() {
         stream?.let { localStream ->
-            try {
-                if (localStream.isOnPreview) {
-                    localStream.stopPreview()
-                }
-                if (localStream.isStreaming) {
-                    localStream.stopStream()
-                }
-                if (localStream.isRecording) {
+            // 分别处理每个清理步骤，确保录制停止不会被跳过
+            
+            // 1. 首先停止录制（最关键，必须确保文件正确关闭）
+            if (localStream.isRecording) {
+                try {
+                    Log.i("MainViewModel", "Stopping recording before releasing camera")
                     localStream.stopRecord()
+                    // 给一点时间让录制完全停止并写入文件
+                    Thread.sleep(200)
+                } catch (e: Exception) {
+                    Log.e("MainViewModel", "Failed to stop recording, but will continue cleanup", e)
                 }
-                // 释放资源
+            }
+            
+            // 2. 停止推流
+            if (localStream.isStreaming) {
+                try {
+                    localStream.stopStream()
+                } catch (e: Exception) {
+                    Log.e("MainViewModel", "Failed to stop streaming", e)
+                }
+            }
+            
+            // 3. 停止预览
+            if (localStream.isOnPreview) {
+                try {
+                    localStream.stopPreview()
+                } catch (e: Exception) {
+                    Log.e("MainViewModel", "Failed to stop preview", e)
+                }
+            }
+            
+            // 4. 最后释放资源
+            try {
                 localStream.release()
                 streamingEventMutableSharedFlow.tryEmit(
-                    StreamingEvent("摄像头资源已释放")
+                    StreamingEvent("Camera resources have been released")
                 )
             } catch (e: Exception) {
-                Log.e("MainViewModel", "释放摄像头资源失败", e)
+                Log.e("MainViewModel", "Failed to release camera resources", e)
             }
         }
         stream = null
@@ -694,8 +786,8 @@ class MainViewModel(
     }
 
     /**
-     * 确保摄像头已准备好（如果需要使用时）
-     * 适用于 Preview=false 的情况，在推流或录像时自动准备摄像头
+     * Ensure the camera is ready (if needed).
+     * This is for cases where Preview=false, to automatically prepare the camera for streaming or recording.
      */
     fun ensureCameraReady(onReady: () -> Unit) {
         if (_isPrepared.value) {
@@ -711,27 +803,52 @@ class MainViewModel(
     }
 
     /**
-     * 启动录像时长计时器，每秒更新一次
+     * Recording duration timer removed - frontend now handles timing
      */
-    private fun startRecordingDurationTimer() {
-        recordingDurationJob?.cancel()
-        recordingDurationJob = viewModelScope.launch {
-            while (true) {
-                delay(1000) // 每秒更新一次
-                val duration = System.currentTimeMillis() - recordingStartTime
-                _recordingDurationMs.value = duration
-            }
-        }
-    }
+    // private fun startRecordingDurationTimer() {
+    //     recordingDurationJob?.cancel()
+    //     recordingDurationJob = viewModelScope.launch {
+    //         while (true) {
+    //             delay(1000) // Update once per second
+    //             val duration = System.currentTimeMillis() - recordingStartTime
+    //             _recordingDurationMs.value = duration
+    //         }
+    //     }
+    // }
+
+    // private fun stopRecordingDurationTimer() {
+    //     recordingDurationJob?.cancel()
+    //     recordingDurationJob = null
+    //     _recordingDurationMs.value = 0L
+    //     recordingStartTime = 0L
+    // }
 
     /**
-     * 停止录像时长计时器并重置时长
+     * 当 ViewModel 被销毁时调用（应用完全退出时）
+     * 确保正在进行的录制被安全停止
      */
-    private fun stopRecordingDurationTimer() {
-        recordingDurationJob?.cancel()
-        recordingDurationJob = null
-        _recordingDurationMs.value = 0L
-        recordingStartTime = 0L
+    override fun onCleared() {
+        super.onCleared()
+        Log.i("MainViewModel", "ViewModel is being cleared")
+        
+        // 如果正在录制，必须先停止录制
+        if (_isRecording.value) {
+            Log.w("MainViewModel", "Recording is still active during onCleared, forcing stop")
+            stream?.let { localStream ->
+                try {
+                    if (localStream.isRecording) {
+                        localStream.stopRecord()
+                        // 同步等待一小段时间，确保文件关闭
+                        Thread.sleep(500)
+                    }
+                } catch (e: Exception) {
+                    Log.e("MainViewModel", "Failed to stop recording in onCleared", e)
+                }
+            }
+        }
+        
+        // 清理所有资源
+        releaseCamera()
     }
 
     companion object {

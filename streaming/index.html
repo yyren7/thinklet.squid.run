@@ -69,7 +69,7 @@
                 </div>
             </div>
             <div class="video-container">
-            <video controls muted autoplay></video>
+                <video muted autoplay playsinline></video>
                 <div class="video-placeholder" data-i18n="noVideoStream">No video stream</div>
             </div>
             <div class="card-body">
@@ -107,6 +107,16 @@
                 <button class="stream-btn start-stream-btn" data-i18n="startStreaming">▶️ Start Streaming</button>
                 <button class="stream-btn stop-stream-btn" data-i18n="stopStreaming">⏹️ Stop Streaming</button>
                 <button class="delete-btn" data-i18n="deleteDevice">🗑️ Delete Device</button>
+            </div>
+            <!-- File Transfer Section -->
+            <div class="file-transfer-section">
+                <div class="file-transfer-header">
+                    <span class="transfer-title">📦 <span data-i18n="fileTransfer">File Transfer</span></span>
+                    <span class="transfer-badge">0</span>
+                </div>
+                <div class="file-transfer-list">
+                    <div class="empty-transfer-state" data-i18n="noActiveTransfers">No active transfers</div>
+                </div>
             </div>
         </div>
     </template>

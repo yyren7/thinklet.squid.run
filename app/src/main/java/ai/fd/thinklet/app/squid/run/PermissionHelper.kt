@@ -8,8 +8,8 @@ import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 
 /**
- * 权限管理助手类
- * 用于请求和检查应用所需的权限
+ * Permission management helper class.
+ * Used to request and check the permissions required by the application.
  */
 class PermissionHelper(private val activity: Activity) {
     
@@ -17,7 +17,7 @@ class PermissionHelper(private val activity: Activity) {
         const val PERMISSION_REQUEST_CODE = 1001
         
         /**
-         * 应用所需的权限列表
+         * List of permissions required by the application.
          */
         val REQUIRED_PERMISSIONS = listOfNotNull(
             Manifest.permission.CAMERA,
@@ -28,7 +28,7 @@ class PermissionHelper(private val activity: Activity) {
     }
     
     /**
-     * 检查是否已获得所有必需权限
+     * Check if all required permissions have been granted.
      */
     fun areAllPermissionsGranted(): Boolean {
         return REQUIRED_PERMISSIONS.all { permission ->
@@ -37,7 +37,7 @@ class PermissionHelper(private val activity: Activity) {
     }
     
     /**
-     * 获取未授权的权限列表
+     * Get a list of denied permissions.
      */
     fun getDeniedPermissions(): List<String> {
         return REQUIRED_PERMISSIONS.filter { permission ->
@@ -46,7 +46,7 @@ class PermissionHelper(private val activity: Activity) {
     }
     
     /**
-     * 请求所有必需的权限
+     * Request all required permissions.
      */
     fun requestPermissions() {
         val deniedPermissions = getDeniedPermissions()
@@ -60,7 +60,7 @@ class PermissionHelper(private val activity: Activity) {
     }
     
     /**
-     * 检查是否需要显示权限说明
+     * Check if it is necessary to show the permission rationale.
      */
     fun shouldShowRequestPermissionRationale(): Boolean {
         return getDeniedPermissions().any { permission ->
@@ -69,19 +69,19 @@ class PermissionHelper(private val activity: Activity) {
     }
     
     /**
-     * 获取权限的友好名称
+     * Get the friendly name of a permission.
      */
     fun getPermissionFriendlyName(permission: String): String {
         return when (permission) {
-            Manifest.permission.CAMERA -> "摄像头"
-            Manifest.permission.RECORD_AUDIO -> "麦克风"
-            Manifest.permission.WRITE_EXTERNAL_STORAGE -> "存储"
+            Manifest.permission.CAMERA -> "Camera"
+            Manifest.permission.RECORD_AUDIO -> "Microphone"
+            Manifest.permission.WRITE_EXTERNAL_STORAGE -> "Storage"
             else -> permission
         }
     }
     
     /**
-     * 获取所有未授权权限的友好名称列表
+     * Get a list of friendly names for all denied permissions.
      */
     fun getDeniedPermissionNames(): List<String> {
         return getDeniedPermissions().map { getPermissionFriendlyName(it) }

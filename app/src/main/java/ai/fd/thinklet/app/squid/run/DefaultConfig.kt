@@ -1,34 +1,35 @@
 package ai.fd.thinklet.app.squid.run
 
 /**
- * 默认配置类
- * 包含应用启动时使用的默认参数，避免每次都需要通过命令行传递参数
+ * Default configuration class.
+ * Contains the default parameters used when the application starts,
+ * avoiding the need to pass parameters via the command line every time.
  */
 object DefaultConfig {
     
-    // RTMP服务器配置
+    // RTMP Server Configuration
     const val DEFAULT_STREAM_URL = "rtmp://192.168.16.88:1935/thinklet.squid.run"
     const val DEFAULT_STREAM_KEY = "test_stream"
     
-    // 视频配置
+    // Video Configuration
     const val DEFAULT_LONG_SIDE = 1920
     const val DEFAULT_SHORT_SIDE = 1080
-    const val DEFAULT_ORIENTATION = "landscape" // "landscape" 或 "portrait"
+    const val DEFAULT_ORIENTATION = "landscape" // "landscape" or "portrait"
     const val DEFAULT_VIDEO_BITRATE = 4096 // kbps
     const val DEFAULT_VIDEO_FPS = 24 // fps
     
-    // 音频配置
+    // Audio Configuration
     const val DEFAULT_AUDIO_SAMPLE_RATE = 48000 // Hz
     const val DEFAULT_AUDIO_BITRATE = 128 // kbps
-    const val DEFAULT_AUDIO_CHANNEL = "stereo" // "monaural" 或 "stereo"
+    const val DEFAULT_AUDIO_CHANNEL = "stereo" // "monaural" or "stereo"
     const val DEFAULT_ECHO_CANCELER = false
     const val DEFAULT_MIC_MODE = "android" // "android", "thinklet5", "thinklet6"
     
-    // 其他配置
-    const val DEFAULT_PREVIEW = false // 是否显示预览（建议关闭以节省电量）
+    // Other Configurations
+    const val DEFAULT_PREVIEW = false // Whether to show a preview (recommended to be off to save power)
     
     /**
-     * 获取所有默认配置的映射表
+     * Get a map of all default configurations.
      */
     fun getDefaultConfigMap(): Map<String, Any> {
         return mapOf(

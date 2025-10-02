@@ -18,6 +18,7 @@ import java.util.UUID
 import java.util.concurrent.TimeUnit
 import kotlin.concurrent.timer
 import androidx.localbroadcastmanager.content.LocalBroadcastManager
+import android.content.BroadcastReceiver
 
 data class DeviceStatus(
     val batteryLevel: Int,
@@ -28,7 +29,9 @@ data class DeviceStatus(
     var isStreaming: Boolean,
     var streamKey: String? = null,
     var isRecording: Boolean = false,
-    var recordingDurationMs: Long = 0
+    var recordingDurationMs: Long = 0,
+    var fileServerPort: Int = 8889,
+    var fileServerEnabled: Boolean = false
 )
 
 data class StatusUpdate(
@@ -55,19 +58,32 @@ class StatusReportingManager(
     private var timer: Timer? = null
     private val gson = Gson()
     val deviceId: String
+    
+    // File transfer server
+    private val fileTransferServer: FileTransferServer by lazy {
+        FileTransferServer(context, port = 8889)
+    }
+    private var fileServerEnabled = false
 
     @Volatile
     private var isStarted = false
     @Volatile
     private var isConnecting = false
     
-    // 动态上报间隔：正常15秒，流媒体/录制时5秒
+    // Dynamic reporting interval: 15 seconds normally, 5 seconds during streaming/recording
     private var currentReportInterval: Long = NORMAL_REPORT_INTERVAL
     
     companion object {
         private const val TAG = "StatusReportingManager"
-        private const val NORMAL_REPORT_INTERVAL = 15000L  // 15秒
-        private const val ACTIVE_REPORT_INTERVAL = 5000L   // 5秒
+        private const val NORMAL_REPORT_INTERVAL = 60000L  // 60 seconds
+        private const val ACTIVE_REPORT_INTERVAL = 60000L   // 60 seconds
+    }
+
+    private val powerConnectionReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            Log.d(TAG, "🔌 Power connection state changed, sending status update.")
+            sendDeviceStatus()
+        }
     }
 
     init {
@@ -96,11 +112,18 @@ class StatusReportingManager(
         sendDeviceStatus()
     }
 
-    fun updateRecordingStatus(isRecording: Boolean, durationMs: Long = 0) {
+    private fun updateRecordingState(isRecording: Boolean, durationMs: Long = 0) {
         this.isRecording = isRecording
         this.recordingDurationMs = durationMs
+    }
+
+    fun updateRecordingStatus(isRecording: Boolean, durationMs: Long = 0) {
+        val stateChanged = this.isRecording != isRecording
+        updateRecordingState(isRecording, durationMs)
         adjustReportInterval()
-        sendDeviceStatus()
+        if (stateChanged) {
+            sendDeviceStatus()
+        }
     }
 
     fun start() {
@@ -110,12 +133,55 @@ class StatusReportingManager(
         }
         isStarted = true
         Log.d(TAG, "StatusReportingManager started.")
+        
+        // Start the file transfer server
+        startFileTransferServer()
+        
+        val intentFilter = IntentFilter().apply {
+            addAction(Intent.ACTION_POWER_CONNECTED)
+            addAction(Intent.ACTION_POWER_DISCONNECTED)
+        }
+        context.registerReceiver(powerConnectionReceiver, intentFilter)
+        
         connect()
+    }
+    
+    /**
+     * Start the file transfer server
+     */
+    private fun startFileTransferServer() {
+        try {
+            fileTransferServer.startServer()
+            fileServerEnabled = true
+            Log.i(TAG, "✅ File transfer server started")
+        } catch (e: Exception) {
+            Log.e(TAG, "❌ Failed to start file transfer server", e)
+            fileServerEnabled = false
+        }
+    }
+    
+    /**
+     * Stop the file transfer server
+     */
+    private fun stopFileTransferServer() {
+        try {
+            fileTransferServer.stopServer()
+            fileServerEnabled = false
+            Log.i(TAG, "File transfer server stopped")
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to stop file transfer server", e)
+        }
     }
 
     fun stop() {
         isStarted = false
         Log.d(TAG, "StatusReportingManager stopped.")
+        
+        // Stop the file transfer server
+        stopFileTransferServer()
+        
+        context.unregisterReceiver(powerConnectionReceiver)
+        
         webSocket?.close(1000, "Client initiated disconnect.")
         timer?.cancel()
     }
@@ -161,9 +227,13 @@ class StatusReportingManager(
                 Log.d(TAG, "📥 Received message: $text")
                 try {
                     val command = gson.fromJson(text, Command::class.java)
+                    if (command?.command == null) {
+                        Log.w(TAG, "Received message with unknown format: $text")
+                        return
+                    }
                     handleCommand(command)
                 } catch (e: Exception) {
-                    Log.e(TAG, "Failed to parse command", e)
+                    Log.w(TAG, "Failed to parse command from message: $text", e)
                 }
             }
 
@@ -200,7 +270,7 @@ class StatusReportingManager(
     }
 
     /**
-     * 根据流媒体和录制状态动态调整上报间隔
+     * Dynamically adjust the reporting interval based on streaming and recording status
      */
     private fun adjustReportInterval() {
         val needActiveInterval = isStreaming || isRecording
@@ -208,8 +278,8 @@ class StatusReportingManager(
         
         if (newInterval != currentReportInterval) {
             currentReportInterval = newInterval
-            Log.d(TAG, "📊 调整上报间隔为: ${newInterval}ms (${if (needActiveInterval) "活跃模式" else "正常模式"})")
-            // 如果WebSocket已连接，重启定时器
+            Log.d(TAG, "📊 Adjusted reporting interval to: ${newInterval}ms (${if (needActiveInterval) "Active mode" else "Normal mode"})")
+            // If WebSocket is connected, restart the timer
             if (webSocket != null) {
                 startReportTimer()
             }
@@ -217,14 +287,14 @@ class StatusReportingManager(
     }
 
     /**
-     * 启动或重启状态上报定时器
+     * Start or restart the status reporting timer
      */
     private fun startReportTimer() {
         timer?.cancel()
         timer = timer(period = currentReportInterval) {
             sendDeviceStatus()
         }
-        Log.d(TAG, "⏱️ 状态上报定时器已启动，间隔: ${currentReportInterval}ms")
+        Log.d(TAG, "⏱️ Status reporting timer started with interval: ${currentReportInterval}ms")
     }
 
     private fun handleCommand(command: Command) {
@@ -285,7 +355,9 @@ class StatusReportingManager(
             isStreaming = this.isStreaming,
             streamKey = this.streamKey,
             isRecording = this.isRecording,
-            recordingDurationMs = this.recordingDurationMs
+            recordingDurationMs = this.recordingDurationMs,
+            fileServerPort = 8889,
+            fileServerEnabled = this.fileServerEnabled
         )
     }
 
@@ -297,8 +369,8 @@ class StatusReportingManager(
 
     private fun getWifiSignalStrength(): Int {
         val wifiManager = context.applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
-        // Android 10 (API 29) 及以上版本需要 `ACCESS_FINE_LOCATION` 权限才能获取Wi-Fi信息
-        // 为了简单起见，我们只获取 RSSI，它在大多数情况下可用
+        // Android 10 (API 29) and above require `ACCESS_FINE_LOCATION` permission to get Wi-Fi information.
+        // For simplicity, we only get the RSSI, which is available in most cases.
         return wifiManager.connectionInfo.rssi
     }
 }

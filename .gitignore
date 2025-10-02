@@ -9,5 +9,6 @@
 .cxx
 local.properties
 /github.properties
-/node_modules
+streaming/node_modules
 streaming/devices.json
+streaming/video

@@ -24,7 +24,7 @@ class ThinkletMicrophoneSource(
         echoCanceler: Boolean,
         noiseSuppressor: Boolean
     ): Boolean {
-        // 不需要提前检查，在 start 时创建
+        // No need to check in advance; it will be created in start.
         return true
     }
 

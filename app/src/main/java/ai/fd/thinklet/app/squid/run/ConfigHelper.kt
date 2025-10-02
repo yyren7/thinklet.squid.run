@@ -1,13 +1,13 @@
 package ai.fd.thinklet.app.squid.run
 
 /**
- * 配置助手类
- * 提供便捷的方法来快速设置常用的配置组合
+ * Configuration helper class.
+ * Provides convenient methods to quickly set up common configuration combinations.
  */
 object ConfigHelper {
     
     /**
-     * 本地测试配置（使用MediaMTX）
+     * Local test configuration (using MediaMTX).
      */
     fun getLocalTestConfig(): Map<String, Any> {
         return mapOf(
@@ -16,18 +16,18 @@ object ConfigHelper {
             "longSide" to 720,
             "shortSide" to 480,
             "orientation" to "landscape",
-            "videoBitrate" to 2048, // 降低比特率用于本地测试
+            "videoBitrate" to 2048, // Lower bitrate for local testing
             "audioSampleRate" to 48000,
             "audioBitrate" to 128,
             "audioChannel" to "stereo",
             "echoCanceler" to false,
             "micMode" to "android",
-            "preview" to true // 本地测试时启用预览
+            "preview" to true // Enable preview for local testing
         )
     }
     
     /**
-     * YouTube Live 配置模板
+     * YouTube Live configuration template.
      */
     fun getYoutubeLiveConfig(streamKey: String): Map<String, Any> {
         return mapOf(
@@ -40,14 +40,14 @@ object ConfigHelper {
             "audioSampleRate" to 48000,
             "audioBitrate" to 128,
             "audioChannel" to "stereo",
-            "echoCanceler" to true, // YouTube推荐启用
+            "echoCanceler" to true, // YouTube recommends enabling this
             "micMode" to "android",
             "preview" to false
         )
     }
     
     /**
-     * 高质量配置（适合专业直播）
+     * High-quality configuration (suitable for professional live streaming).
      */
     fun getHighQualityConfig(streamUrl: String, streamKey: String): Map<String, Any> {
         return mapOf(
@@ -58,16 +58,16 @@ object ConfigHelper {
             "orientation" to "landscape",
             "videoBitrate" to 8192, // 8Mbps
             "audioSampleRate" to 48000,
-            "audioBitrate" to 320, // 高质量音频
+            "audioBitrate" to 320, // High-quality audio
             "audioChannel" to "stereo",
             "echoCanceler" to true,
-            "micMode" to "thinklet5", // 使用THINKLET多麦克风
+            "micMode" to "thinklet5", // Use THINKLET multi-microphone
             "preview" to false
         )
     }
     
     /**
-     * 低功耗配置（节省电池）
+     * Low-power configuration (to save battery).
      */
     fun getLowPowerConfig(streamUrl: String, streamKey: String): Map<String, Any> {
         return mapOf(
@@ -79,7 +79,7 @@ object ConfigHelper {
             "videoBitrate" to 1024, // 1Mbps
             "audioSampleRate" to 44100,
             "audioBitrate" to 96,
-            "audioChannel" to "monaural", // 单声道节省带宽
+            "audioChannel" to "monaural", // Monaural to save bandwidth
             "echoCanceler" to false,
             "micMode" to "android",
             "preview" to false
@@ -87,7 +87,7 @@ object ConfigHelper {
     }
     
     /**
-     * 竖屏配置（适合移动设备观看）
+     * Portrait configuration (suitable for viewing on mobile devices).
      */
     fun getPortraitConfig(streamUrl: String, streamKey: String): Map<String, Any> {
         return mapOf(
@@ -95,7 +95,7 @@ object ConfigHelper {
             "streamKey" to streamKey,
             "longSide" to 720,
             "shortSide" to 480,
-            "orientation" to "portrait", // 强制竖屏
+            "orientation" to "portrait", // Force portrait orientation
             "videoBitrate" to 3072,
             "audioSampleRate" to 48000,
             "audioBitrate" to 128,
@@ -107,7 +107,7 @@ object ConfigHelper {
     }
     
     /**
-     * 生成adb命令字符串
+     * Generate an adb command string.
      */
     fun generateAdbCommand(config: Map<String, Any>): String {
         val baseCommand = "adb shell am start -n ai.fd.thinklet.app.squid.run/.MainActivity -a android.intent.action.MAIN"

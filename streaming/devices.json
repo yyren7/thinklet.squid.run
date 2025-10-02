@@ -1,10 +1,12 @@
 {
     "03eea09f-dfe5-487e-bb2a-9ebfda23f2ff": {
         "id": "03eea09f-dfe5-487e-bb2a-9ebfda23f2ff",
-        "lastSeen": "2025-10-01T08:45:58.295Z",
-        "isOnline": false,
+        "lastSeen": "2025-10-02T06:00:19.314Z",
+        "isOnline": true,
         "status": {
             "batteryLevel": 100,
+            "fileServerEnabled": true,
+            "fileServerPort": 8889,
             "isCharging": true,
             "isOnline": true,
             "isRecording": false,
@@ -12,8 +14,10 @@
             "isStreamingReady": true,
             "recordingDurationMs": 0,
             "streamKey": "device1",
-            "wifiSignalStrength": -65
-        }
+            "wifiSignalStrength": -67
+        },
+        "ip": "192.168.16.182",
+        "recordingStartTime": null
     },
     "acb90cd6-cd9c-44c0-9d44-54f8f0eb8246": {
         "id": "acb90cd6-cd9c-44c0-9d44-54f8f0eb8246",
@@ -28,6 +32,38 @@
             "isStreamingReady": true,
             "recordingDurationMs": 0,
             "streamKey": "device2",
+            "wifiSignalStrength": -63
+        }
+    },
+    "a1b90cd6-cd9c-44c0-9d44-54f8f0eb8246": {
+        "id": "a1b90cd6-cd9c-44c0-9d44-54f8f0eb8246",
+        "lastSeen": "2025-10-01T08:46:10.370Z",
+        "isOnline": false,
+        "status": {
+            "batteryLevel": 100,
+            "isCharging": true,
+            "isOnline": true,
+            "isRecording": false,
+            "isStreaming": false,
+            "isStreamingReady": true,
+            "recordingDurationMs": 0,
+            "streamKey": "device3",
+            "wifiSignalStrength": -63
+        }
+    },
+    "a2b90cd6-cd9c-44c0-9d44-54f8f0eb8246": {
+        "id": "a2b90cd6-cd9c-44c0-9d44-54f8f0eb8246",
+        "lastSeen": "2025-10-01T08:46:10.370Z",
+        "isOnline": false,
+        "status": {
+            "batteryLevel": 100,
+            "isCharging": true,
+            "isOnline": true,
+            "isRecording": false,
+            "isStreaming": false,
+            "isStreamingReady": true,
+            "recordingDurationMs": 0,
+            "streamKey": "device4",
             "wifiSignalStrength": -63
         }
     }

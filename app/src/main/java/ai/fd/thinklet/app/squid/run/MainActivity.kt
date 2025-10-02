@@ -103,10 +103,10 @@ class MainActivity : AppCompatActivity() {
             }
         })
 
-        // 如果默认显示预览，则初始化预览并显示
+        // If the preview is shown by default, initialize and display it.
         if (viewModel.shouldShowPreview) {
             inflateAndSetupPreview()
-            // 显示预览（这会触发 surfaceChanged 并启动摄像头）
+            // Show the preview (this will trigger surfaceChanged and start the camera).
             showPreview()
         }
 
@@ -158,24 +158,30 @@ class MainActivity : AppCompatActivity() {
                 .flowWithLifecycle(lifecycle)
                 .collect { isRecording ->
                     binding.recording.text = isRecording.toString()
-                    // 更新按钮文字
+                    // Update button text.
                     binding.buttonRecord.text = if (isRecording) {
                         getString(R.string.button_stop_recording)
                     } else {
                         getString(R.string.button_start_recording)
                     }
-                }
-        }
-        lifecycleScope.launch {
-            viewModel.recordingDurationMs
-                .flowWithLifecycle(lifecycle)
-                .collect { durationMs ->
+                    // Update recording status - duration now handled by frontend
                     statusReportingManager.updateRecordingStatus(
-                        viewModel.isRecording.value,
-                        durationMs
+                        isRecording,
+                        0L  // Duration always 0, frontend handles timing
                     )
                 }
         }
+        // Recording duration monitoring removed - frontend now handles timing
+        // lifecycleScope.launch {
+        //     viewModel.recordingDurationMs
+        //         .flowWithLifecycle(lifecycle)
+        //         .collect { durationMs ->
+        //             statusReportingManager.updateRecordingStatus(
+        //                 viewModel.isRecording.value,
+        //                 durationMs
+        //             )
+        //         }
+        // }
         lifecycleScope.launch {
             viewModel.isPreviewActive
                 .flowWithLifecycle(lifecycle)
@@ -184,12 +190,12 @@ class MainActivity : AppCompatActivity() {
                 }
         }
 
-        // 设置录制按钮点击事件
+        // Set the record button click listener.
         binding.buttonRecord.setOnClickListener {
             toggleRecording()
         }
 
-        // 设置预览切换按钮点击事件
+        // Set the preview toggle button click listener.
         binding.buttonTogglePreview.setOnClickListener {
             togglePreview()
         }
@@ -231,9 +237,8 @@ class MainActivity : AppCompatActivity() {
         when (keyCode) {
             KeyEvent.KEYCODE_CAMERA -> {
                 // The original physical button trigger logic is retained,
-                // but now it calls the unified `toggleStreaming` method,
-                // which is also used by the remote API.
-                toggleStreaming()
+                // but now it calls the unified `toggleRecording` method.
+                toggleRecording()
                 return true
             }
 
@@ -266,18 +271,6 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun toggleStreaming() {
-        if (!viewModel.isStreaming.value) {
-            viewModel.maybeStartStreaming { isStreamingStarted ->
-                if (!isStreamingStarted) {
-                    vibrator.vibrate(createStaccatoVibrationEffect(2))
-                }
-            }
-        } else {
-            viewModel.stopStreaming()
-        }
-    }
-
     private fun toggleAudioMute() {
         if (viewModel.isAudioMuted.value) {
             viewModel.unMuteAudio()
@@ -305,24 +298,24 @@ class MainActivity : AppCompatActivity() {
 
     private fun togglePreview() {
         if (viewModel.isPreviewActive.value) {
-            // 停止预览并隐藏窗口
+            // Stop the preview and hide the window.
             hidePreview()
             vibrator.vibrate(createStaccatoVibrationEffect(1))
         } else {
-            // 显示预览窗口并启动预览
+            // Show the preview window and start the preview.
             showPreview()
             vibrator.vibrate(createStaccatoVibrationEffect(1))
         }
     }
 
     private fun showPreview() {
-        // 如果还没有 inflate，先 inflate
+        // If not yet inflated, inflate it first.
         if (!isPreviewInflated) {
             inflateAndSetupPreview()
         } else {
-            // 已经 inflate 过了，只需要显示并启动预览
+            // It's already inflated, just show it and start the preview.
             previewBinding?.preview?.visibility = android.view.View.VISIBLE
-            // 重新启动预览（如果 Surface 已经存在）
+            // Restart the preview (if the Surface already exists).
             previewBinding?.preview?.holder?.let { holder ->
                 holder.surface?.let { surface ->
                     if (surface.isValid) {
@@ -335,10 +328,10 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun hidePreview() {
-        // 先停止预览，再隐藏 Surface
+        // Stop the preview first, then hide the Surface.
         viewModel.stopPreview()
-        // 使用 postDelayed 给渲染线程足够时间停止
-        // 100ms 通常足够 GL 线程停止渲染
+        // Use postDelayed to give the rendering thread enough time to stop.
+        // 100ms is usually sufficient for the GL thread to stop rendering.
         previewBinding?.preview?.postDelayed({
             previewBinding?.preview?.visibility = android.view.View.GONE
         }, 100)
@@ -365,15 +358,15 @@ class MainActivity : AppCompatActivity() {
                 height: Int
             ) {
                 // Surface is ready, now we can start the preview
-                // 只有在可见状态下才启动预览
+                // Only start the preview if it's visible.
                 if (localPreviewBinding.preview.visibility == android.view.View.VISIBLE) {
                     viewModel.startPreview(holder.surface, width, height)
                 }
             }
 
             override fun surfaceDestroyed(holder: SurfaceHolder) {
-                // Surface 被系统销毁时（例如 Activity 切换），确保停止预览
-                // 注意：hidePreview() 已经调用过 stopPreview()，这里主要处理系统触发的销毁
+                // When the Surface is destroyed by the system (e.g., Activity switch), ensure the preview is stopped.
+                // Note: hidePreview() already calls stopPreview(), this mainly handles system-triggered destruction.
                 if (localPreviewBinding.preview.visibility == android.view.View.VISIBLE) {
                     viewModel.stopPreview()
                 }
@@ -393,20 +386,20 @@ class MainActivity : AppCompatActivity() {
 
     private fun showPermissionRationaleDialog() {
         val deniedPermissions = permissionHelper.getDeniedPermissionNames()
-        val hasCameraPermission = deniedPermissions.contains("摄像头")
+        val hasCameraPermission = deniedPermissions.contains("Camera")
         val message = if (hasCameraPermission) {
-            "SquidRun 是一个直播应用，需要以下权限才能正常工作：\n\n${deniedPermissions.joinToString("\n• ", "• ")}\n\n特别是摄像头权限是必需的，没有摄像头权限无法进行直播。请授予这些权限以继续使用应用。"
+            "SquidRun is a live streaming app and requires the following permissions to function correctly:\n\n${deniedPermissions.joinToString("\n• ", "• ")}\n\nThe camera permission is especially required; live streaming is not possible without it. Please grant these permissions to continue using the app."
         } else {
-            "SquidRun 需要以下权限才能正常工作：\n\n${deniedPermissions.joinToString("\n• ", "• ")}\n\n请授予这些权限以继续使用应用。"
+            "SquidRun requires the following permissions to function correctly:\n\n${deniedPermissions.joinToString("\n• ", "• ")}\n\nPlease grant these permissions to continue using the app."
         }
         
         AlertDialog.Builder(this)
-            .setTitle("需要权限")
+            .setTitle("Permissions Required")
             .setMessage(message)
-            .setPositiveButton("授予权限") { _, _ ->
+            .setPositiveButton("Grant Permissions") { _, _ ->
                 permissionHelper.requestPermissions()
             }
-            .setNegativeButton("取消") { dialog, _ ->
+            .setNegativeButton("Cancel") { dialog, _ ->
                 dialog.dismiss()
                 finish()
             }
@@ -423,28 +416,28 @@ class MainActivity : AppCompatActivity() {
         
         if (requestCode == PermissionHelper.PERMISSION_REQUEST_CODE) {
             if (grantResults.isNotEmpty() && grantResults.all { it == PackageManager.PERMISSION_GRANTED }) {
-                // 所有权限都已授予
+                // All permissions have been granted.
                 binding.permissionGranted.text = "true"
-                // 不自动初始化摄像头，等待用户主动操作（推流/录像/预览）
+                // Do not automatically initialize the camera; wait for the user to take action (stream/record/preview).
             } else {
-                // 有权限被拒绝
+                // Some permissions were denied.
                 binding.permissionGranted.text = "false"
                 val deniedPermissions = permissionHelper.getDeniedPermissionNames()
-                val hasCameraPermission = deniedPermissions.contains("摄像头")
+                val hasCameraPermission = deniedPermissions.contains("Camera")
                 
                 val message = if (hasCameraPermission) {
-                    "以下权限被拒绝，应用无法正常工作：\n\n${deniedPermissions.joinToString("\n• ", "• ")}\n\n特别注意：没有摄像头权限，直播功能将无法使用。请在系统设置中手动授予这些权限。"
+                    "The following permissions were denied, and the app cannot function correctly:\n\n${deniedPermissions.joinToString("\n• ", "• ")}\n\nNote: Without camera permission, the live streaming feature will not work. Please grant these permissions manually in the system settings."
                 } else {
-                    "以下权限被拒绝，应用无法正常工作：\n\n${deniedPermissions.joinToString("\n• ", "• ")}\n\n请在系统设置中手动授予这些权限。"
+                    "The following permissions were denied, and the app cannot function correctly:\n\n${deniedPermissions.joinToString("\n• ", "• ")}\n\nPlease grant these permissions manually in the system settings."
                 }
                 
                 AlertDialog.Builder(this)
-                    .setTitle("权限被拒绝")
+                    .setTitle("Permissions Denied")
                     .setMessage(message)
-                    .setPositiveButton("重试") { _, _ ->
+                    .setPositiveButton("Retry") { _, _ ->
                         checkAndRequestPermissions()
                     }
-                    .setNegativeButton("退出") { _, _ ->
+                    .setNegativeButton("Exit") { _, _ ->
                         finish()
                     }
                     .setCancelable(false)

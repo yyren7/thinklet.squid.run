@@ -1,6 +1,0 @@
-{
-  "dependencies": {
-    "multiparty": "^4.2.3",
-    "ws": "^8.18.3"
-  }
-}

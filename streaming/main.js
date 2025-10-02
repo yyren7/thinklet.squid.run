@@ -35,6 +35,73 @@ document.addEventListener('DOMContentLoaded', () => {
 
     const flvPlayers = {};
     let devices = [];
+    let fileTransfers = {}; // File transfer task map
+    const recordingTimers = {}; // Recording duration timers (interval IDs)
+
+    // 低延迟监控：追赶最新直播内容
+    function setupLowLatencyMonitor(player, videoElement, deviceId) {
+        const MAX_BUFFER_DELAY = 3; // 最大允许延迟3秒
+        const CHECK_INTERVAL = 1000; // 每秒检查一次
+        
+        const intervalId = setInterval(() => {
+            if (!flvPlayers[deviceId]) {
+                clearInterval(intervalId);
+                return;
+            }
+            
+            try {
+                const buffered = videoElement.buffered;
+                if (buffered.length > 0) {
+                    const currentTime = videoElement.currentTime;
+                    const bufferedEnd = buffered.end(buffered.length - 1);
+                    const delay = bufferedEnd - currentTime;
+                    
+                    // 如果延迟超过阈值，跳转到最新位置
+                    if (delay > MAX_BUFFER_DELAY) {
+                        console.log(`Device ${deviceId}: 延迟过大 (${delay.toFixed(2)}s)，跳转到最新位置`);
+                        videoElement.currentTime = bufferedEnd - 0.5; // 跳到最新位置，留0.5秒缓冲
+                    }
+                }
+            } catch (e) {
+                console.warn(`Device ${deviceId}: 延迟检查失败`, e);
+            }
+        }, CHECK_INTERVAL);
+        
+        // 保存定时器ID以便清理
+        player._latencyMonitorInterval = intervalId;
+    }
+
+    // 页面可见性变化处理
+    function handleVisibilityChange() {
+        if (!document.hidden) {
+            console.log('页面重新可见，刷新所有直播流到最新位置');
+            Object.entries(flvPlayers).forEach(([deviceId, player]) => {
+                try {
+                    const videoElement = document.querySelector(`#device-${deviceId} video`);
+                    if (videoElement && videoElement.buffered.length > 0) {
+                        const bufferedEnd = videoElement.buffered.end(videoElement.buffered.length - 1);
+                        const currentTime = videoElement.currentTime;
+                        const delay = bufferedEnd - currentTime;
+                        
+                        if (delay > 1) {
+                            console.log(`Device ${deviceId}: 跳转到最新位置 (延迟: ${delay.toFixed(2)}s)`);
+                            videoElement.currentTime = bufferedEnd - 0.5;
+                        }
+                        
+                        // 确保视频继续播放
+                        if (videoElement.paused) {
+                            videoElement.play().catch(e => console.warn(`Failed to resume ${deviceId}:`, e));
+                        }
+                    }
+                } catch (e) {
+                    console.warn(`Failed to sync device ${deviceId}:`, e);
+                }
+            });
+        }
+    }
+
+    // 监听页面可见性变化
+    document.addEventListener('visibilitychange', handleVisibilityChange);
 
     // Initialize language
     updateLanguage(currentLang);
@@ -111,7 +178,7 @@ document.addEventListener('DOMContentLoaded', () => {
         // Update device info
         const streamKey = device.status?.streamKey || device.id;
         card.querySelector('.device-name').textContent = `${t('deviceName')}: ${streamKey}`;
-        card.querySelector('.device-id').textContent = `ID: ${device.id}`;
+        card.querySelector('.device-id').textContent = `${t('deviceId')}${device.id}`;
         
         // Update status
         const statusBadge = card.querySelector('.status-badge');
@@ -153,18 +220,45 @@ document.addEventListener('DOMContentLoaded', () => {
                 </div>
             `;
 
-            wifiEl.textContent = status.wifiSignalStrength !== undefined ? `${status.wifiSignalStrength} dBm` : 'N/A';
+            wifiEl.textContent = status.wifiSignalStrength !== undefined ? `${status.wifiSignalStrength} dBm` : t('notAvailable');
             
             // Recording status with modern indicator
-            if (status.isRecording) {
-                const duration = formatDuration(status.recordingDurationMs || 0);
+            // Use server-side timestamp for accurate duration calculation
+            if (status.isRecording && device.recordingStartTime) {
+                // Clear any existing timer
+                if (recordingTimers[device.id]) {
+                    clearInterval(recordingTimers[device.id]);
+                }
+
+                const updateRecordingTime = () => {
+                    // Calculate elapsed time from server-side start time
+                    const elapsedTime = Date.now() - device.recordingStartTime;
+                    const duration = formatDuration(elapsedTime);
+                    
+                    const recordingElement = card.querySelector('.status-recording span:last-child');
+                    if (recordingElement) {
+                        recordingElement.textContent = `${t('recording')} ${duration}`;
+                    }
+                };
+                
+                // Initial update
+                const elapsedTime = Date.now() - device.recordingStartTime;
                 recordingEl.innerHTML = `
                     <span class="status-indicator status-recording">
                         <span class="status-led"></span>
-                        <span>${t('recording')} ${duration}</span>
+                        <span>${t('recording')} ${formatDuration(elapsedTime)}</span>
                     </span>
                 `;
+
+                // Start timer to update every second
+                recordingTimers[device.id] = setInterval(updateRecordingTime, 1000);
             } else {
+                // Recording stopped or not started
+                if (recordingTimers[device.id]) {
+                    clearInterval(recordingTimers[device.id]);
+                    delete recordingTimers[device.id];
+                }
+
                 recordingEl.innerHTML = `
                     <span class="status-indicator status-prepared">
                         <span class="status-led"></span>
@@ -235,6 +329,9 @@ document.addEventListener('DOMContentLoaded', () => {
             stopBtn.style.display = 'none';
         }
 
+        // Update file transfer section for this device
+        updateDeviceTransfers(card, device.id);
+
         // Handle video stream
         const videoElement = card.querySelector('video');
         const placeholder = card.querySelector('.video-placeholder');
@@ -246,15 +343,31 @@ document.addEventListener('DOMContentLoaded', () => {
             
             if (flvjs.isSupported() && !flvPlayers[device.id]) {
                 console.log(`Creating player for: ${device.id}`);
-                    const flvPlayer = flvjs.createPlayer({
-                        type: 'flv',
-                        isLive: true,
-                        url: streamUrl
-                    });
-                    flvPlayer.attachMediaElement(videoElement);
-                    flvPlayer.load();
+                const flvPlayer = flvjs.createPlayer({
+                    type: 'flv',
+                    isLive: true,
+                    url: streamUrl
+                }, {
+                    // 低延迟配置
+                    enableWorker: false,
+                    enableStashBuffer: false,  // 禁用缓存缓冲区
+                    stashInitialSize: 128,     // 减小初始缓存大小
+                    isLive: true,
+                    lazyLoad: false,
+                    lazyLoadMaxDuration: 0.2,
+                    seekType: 'range',
+                    autoCleanupSourceBuffer: true,
+                    autoCleanupMaxBackwardDuration: 3,  // 只保留3秒历史数据
+                    autoCleanupMinBackwardDuration: 2,
+                });
+                flvPlayer.attachMediaElement(videoElement);
+                flvPlayer.load();
                 flvPlayer.play().catch(e => console.error(`Failed to play ${device.id}:`, e));
-                    flvPlayers[device.id] = flvPlayer;
+                
+                // 设置低延迟追赶机制
+                setupLowLatencyMonitor(flvPlayer, videoElement, device.id);
+                
+                flvPlayers[device.id] = flvPlayer;
             }
         } else {
             placeholder.style.display = 'flex';
@@ -263,7 +376,14 @@ document.addEventListener('DOMContentLoaded', () => {
             
             if (flvPlayers[device.id]) {
                 console.log(`Destroying player for: ${device.id}`);
-                flvPlayers[device.id].destroy();
+                const player = flvPlayers[device.id];
+                
+                // 清理延迟监控定时器
+                if (player._latencyMonitorInterval) {
+                    clearInterval(player._latencyMonitorInterval);
+                }
+                
+                player.destroy();
                 delete flvPlayers[device.id];
             }
         }
@@ -281,7 +401,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Delete device
     async function deleteDevice(id) {
-        if (!confirm(`${t('confirmDelete')} ${id}？${t('irreversible')}`)) return;
+        if (!confirm(`${t('confirmDelete')} ${id}? ${t('irreversible')}`)) return;
 
         try {
             const response = await fetch('/delete-device', {
@@ -291,7 +411,7 @@ document.addEventListener('DOMContentLoaded', () => {
             });
             const result = await response.json();
             if (!result.success) {
-                alert(`${t('deleteFailed')}: ${result.message}`);
+                alert(`${t('deleteFailed')}: ${t(result.message)}`);
             }
         } catch (error) {
             console.error('Error deleting device:', error);
@@ -311,7 +431,7 @@ document.addEventListener('DOMContentLoaded', () => {
             });
             const result = await response.json();
             if (!result.success) {
-                alert(`${t(action + 'StreamErrorFail')}: ${result.message}`);
+                alert(`${t(action + 'StreamErrorFail')}: ${t(result.message)}`);
             }
         } catch (error) {
             console.error(`Error ${action}ing stream:`, error);
@@ -333,33 +453,50 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // WebSocket Connection
     function connectWebSocket() {
-        const ws = new WebSocket(`ws://${window.location.host}`);
+        const wsUrl = `ws://${window.location.hostname}:8000`;
+        const ws = new WebSocket(wsUrl);
 
         ws.onopen = () => {
             console.log('WebSocket connected');
             connectionStatus.classList.add('show', 'connected');
             connectionStatus.classList.remove('disconnected');
             connectionText.textContent = t('connected');
-            setTimeout(() => {
-                connectionStatus.classList.remove('show');
-            }, 3000);
+
+            // Identify this client as a browser
+            ws.send(JSON.stringify({ type: 'identify', client: 'browser' }));
         };
 
         ws.onmessage = (event) => {
-            const data = JSON.parse(event.data);
-            console.log('WebSocket message received:', data);
+            try {
+                const data = JSON.parse(event.data);
+                console.log('WebSocket message received:', data);
 
-            if (data.type === 'deviceUpdate') {
-                createOrUpdateCard(data.payload);
-            } else if (data.type === 'deviceRemoved') {
-                const card = deviceGrid.querySelector(`#device-${data.payload.id}`);
-                if (card) card.remove();
-                if (flvPlayers[data.payload.id]) {
-                    flvPlayers[data.payload.id].destroy();
-                    delete flvPlayers[data.payload.id];
+                if (data.type === 'deviceUpdate') {
+                    createOrUpdateCard(data.payload);
+                } else if (data.type === 'deviceRemoved') {
+                    const card = deviceGrid.querySelector(`#device-${data.payload.id}`);
+                    if (card) card.remove();
+                    if (flvPlayers[data.payload.id]) {
+                        const player = flvPlayers[data.payload.id];
+                        
+                        // 清理延迟监控定时器
+                        if (player._latencyMonitorInterval) {
+                            clearInterval(player._latencyMonitorInterval);
+                        }
+                        
+                        player.destroy();
+                        delete flvPlayers[data.payload.id];
+                    }
+                    devices = devices.filter(d => d.id !== data.payload.id);
+                    updateStats();
+                } else if (data.type === 'fileTransferProgress') {
+                    updateFileTransferProgress(data.payload);
+                } else if (data.type === 'fileTransferInitialState') {
+                    // Handle initial state of all transfers
+                    data.payload.forEach(updateFileTransferProgress);
                 }
-                devices = devices.filter(d => d.id !== data.payload.id);
-                updateStats();
+            } catch (error) {
+                console.error('Failed to parse WebSocket message:', error);
             }
         };
 
@@ -375,6 +512,92 @@ document.addEventListener('DOMContentLoaded', () => {
             console.error('WebSocket error:', error);
             ws.close();
         };
+    }
+
+    // Update file transfer progress
+    function updateFileTransferProgress(transfer) {
+        // If the status is not 'failed', clear any previous errors.
+        // This handles the case where a transfer reconnects and resumes successfully.
+        if (transfer.status !== 'failed') {
+            transfer.error = null;
+        }
+
+        fileTransfers[transfer.id] = transfer;
+        
+        // Update the device card's transfer section
+        const card = deviceGrid.querySelector(`#device-${transfer.deviceId}`);
+        if (card) {
+            updateDeviceTransfers(card, transfer.deviceId);
+        }
+    }
+
+    // Update device-specific file transfers
+    function updateDeviceTransfers(card, deviceId) {
+        const transferSection = card.querySelector('.file-transfer-section');
+        const transferList = transferSection.querySelector('.file-transfer-list');
+        const transferBadge = transferSection.querySelector('.transfer-badge');
+        
+        // Get transfers for this specific device
+        const deviceTransfers = Object.values(fileTransfers).filter(t => t.deviceId === deviceId);
+        
+        // Update badge count
+        transferBadge.textContent = deviceTransfers.length;
+        
+        if (deviceTransfers.length === 0) {
+            transferList.innerHTML = `<div class="empty-transfer-state">${t('noActiveTransfers')}</div>`;
+            transferSection.classList.remove('has-transfers');
+            return;
+        }
+        
+        transferSection.classList.add('has-transfers');
+        
+        transferList.innerHTML = deviceTransfers.map(transfer => {
+            const statusEmoji = {
+                'downloading': '⬇️',
+                'verifying': '🔐',
+                'completed': '✅',
+                'failed': '❌',
+                'queued': '⏳',
+                'retrying': '🔄',
+                'paused': '⏸️'
+            }[transfer.status] || '⚙️';
+            
+            const sizeText = `${(transfer.downloadedBytes / 1024 / 1024).toFixed(2)} / ${(transfer.totalBytes / 1024 / 1024).toFixed(2)} MB`;
+            
+            // Add a hint for paused status
+            const pausedHint = transfer.status === 'paused' 
+                ? `<div class="transfer-hint">${t('resumeOnOnline')}</div>` 
+                : '';
+            
+            return `
+                <div class="transfer-item ${transfer.status}">
+                    <div class="transfer-item-header">
+                        <span class="transfer-status-badge">${statusEmoji} ${t('status' + transfer.status.charAt(0).toUpperCase() + transfer.status.slice(1))}</span>
+                    </div>
+                    <div class="transfer-filename">${transfer.fileName}</div>
+                    <div class="transfer-progress-bar">
+                        <div class="transfer-progress-fill" style="width: ${transfer.progress}%"></div>
+                    </div>
+                    <div class="transfer-details">
+                        <span>${sizeText}</span>
+                        <span>${transfer.progress}%</span>
+                    </div>
+                    ${transfer.error ? `<div class="transfer-error">${t('errorLabel')}: ${transfer.error}</div>` : ''}
+                    ${pausedHint}
+                </div>
+            `;
+        }).join('');
+        
+        // Auto-remove completed tasks after 2 minutes
+        deviceTransfers.forEach(transfer => {
+            if (transfer.status === 'completed' && !transfer.cleanupScheduled) {
+                transfer.cleanupScheduled = true;
+                setTimeout(() => {
+                    delete fileTransfers[transfer.id];
+                    updateDeviceTransfers(card, deviceId);
+                }, 120000);
+            }
+        });
     }
 
     initializeDashboard();
