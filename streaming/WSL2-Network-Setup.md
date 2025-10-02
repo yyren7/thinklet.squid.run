@@ -1,55 +1,55 @@
-# WSL2 网络配置指南
+# WSL2 Network Configuration Guide
 
-## 问题说明
+## The Problem
 
-当 Docker 运行在 WSL2 中时，由于 WSL2 使用 NAT 网络，Android 设备无法直接访问 WSL2 内的 Docker 容器端口。因此需要配置 Windows 端口转发。
+When Docker runs in WSL2, Android devices cannot directly access Docker container ports within WSL2 because WSL2 uses NAT networking. Therefore, Windows port forwarding needs to be configured.
 
-## 快速配置（推荐）
+## Quick Configuration (Recommended)
 
-### 方法 1: 使用自动配置脚本
+### Method 1: Using the Automated Configuration Script
 
-1. **以管理员身份运行 PowerShell**
-   - 右键点击 PowerShell 图标
-   - 选择 "以管理员身份运行"
+1.  **Run PowerShell as Administrator**
+    -   Right-click the PowerShell icon
+    -   Select "Run as administrator"
 
-2. **切换到项目目录并运行脚本**
-   ```powershell
-   cd C:\Users\J100052060\thinklet.squid.run\streaming
-   .\setup-wsl2-port-forwarding.ps1
-   ```
+2.  **Navigate to the project directory and run the script**
+    ```powershell
+    cd C:\Users\J100052060\thinklet.squid.run\streaming
+    .\setup-wsl2-port-forwarding.ps1
+    ```
 
-3. **验证配置**
-   ```powershell
-   netsh interface portproxy show v4tov4
-   ```
+3.  **Verify the configuration**
+    ```powershell
+    netsh interface portproxy show v4tov4
+    ```
 
-### 方法 2: 手动配置
+### Method 2: Manual Configuration
 
-如果自动脚本失败，可以手动执行以下命令（需要管理员权限）：
+If the automated script fails, you can manually execute the following commands (requires administrator privileges):
 
 ```powershell
-# 获取 WSL2 IP 地址
+# Get WSL2 IP Address
 $wslIp = (wsl -e bash -c "hostname -I").Trim().Split()[0]
 Write-Host "WSL2 IP: $wslIp"
 
-# 添加端口转发规则
+# Add port forwarding rules
 netsh interface portproxy add v4tov4 listenport=1935 listenaddress=0.0.0.0 connectport=1935 connectaddress=$wslIp
 netsh interface portproxy add v4tov4 listenport=8080 listenaddress=0.0.0.0 connectport=8080 connectaddress=$wslIp
 netsh interface portproxy add v4tov4 listenport=1985 listenaddress=0.0.0.0 connectport=1985 connectaddress=$wslIp
 
-# 添加防火墙规则
+# Add firewall rule
 New-NetFirewallRule -DisplayName "WSL2 SRS Streaming Ports" -Direction Inbound -Action Allow -Protocol TCP -LocalPort 1935,8080,1985
 ```
 
-## 验证配置
+## Verifying the Configuration
 
-### 1. 检查端口转发
+### 1. Check Port Forwarding
 
 ```powershell
 netsh interface portproxy show v4tov4
 ```
 
-应该看到类似输出：
+You should see output similar to this:
 ```
 Listen on ipv4:             Connect to ipv4:
 
@@ -60,89 +60,89 @@ Address         Port        Address         Port
 0.0.0.0         1985        172.26.xxx.xxx  1985
 ```
 
-### 2. 检查防火墙规则
+### 2. Check Firewall Rule
 
 ```powershell
 Get-NetFirewallRule -DisplayName "WSL2 SRS Streaming Ports"
 ```
 
-### 3. 测试 SRS 服务器连接
+### 3. Test SRS Server Connection
 
-在 Android 设备或同一局域网的其他设备上访问：
+On your Android device or another device on the same local network, visit:
 ```
 http://192.168.16.88:8080
 ```
 
-应该能看到 SRS 的默认页面。
+You should see the default SRS page.
 
-## 清理配置
+## Cleaning Up the Configuration
 
-如果需要删除端口转发规则：
+If you need to remove the port forwarding rules:
 
 ```powershell
-# 删除端口转发
+# Delete port forwarding
 netsh interface portproxy delete v4tov4 listenport=1935 listenaddress=0.0.0.0
 netsh interface portproxy delete v4tov4 listenport=8080 listenaddress=0.0.0.0
 netsh interface portproxy delete v4tov4 listenport=1985 listenaddress=0.0.0.0
 
-# 删除防火墙规则
+# Delete firewall rule
 Remove-NetFirewallRule -DisplayName "WSL2 SRS Streaming Ports"
 ```
 
-## 重启后的注意事项
+## Notes on Rebooting
 
-**重要**: WSL2 的 IP 地址可能在重启后改变！
+**Important**: The WSL2 IP address may change after a reboot!
 
-如果重启电脑后无法连接，请重新运行配置脚本：
+If you cannot connect after restarting your computer, please re-run the configuration script:
 
 ```powershell
-# 以管理员身份运行
+# Run as administrator
 cd C:\Users\J100052060\thinklet.squid.run\streaming
 .\setup-wsl2-port-forwarding.ps1
 ```
 
-## 故障排查
+## Troubleshooting
 
-### 问题：Android 设备无法连接
+### Issue: Android device cannot connect
 
-1. **检查 Windows 主机 IP**
-   ```powershell
-   ipconfig | findstr "IPv4"
-   ```
-   确认 `192.168.16.88` 是正确的局域网 IP
+1.  **Check Windows Host IP**
+    ```powershell
+    ipconfig | findstr "IPv4"
+    ```
+    Confirm that `192.168.16.88` is the correct local network IP.
 
-2. **检查 WSL2 IP**
-   ```powershell
-   wsl -e bash -c "hostname -I"
-   ```
+2.  **Check WSL2 IP**
+    ```powershell
+    wsl -e bash -c "hostname -I"
+    ```
 
-3. **检查 SRS 服务器状态**
-   ```bash
-   wsl -e bash -c "cd /mnt/c/Users/J100052060/thinklet.squid.run/streaming && docker compose ps"
-   ```
+3.  **Check SRS Server Status**
+    ```bash
+    wsl -e bash -c "cd /mnt/c/Users/J100052060/thinklet.squid.run/streaming && docker compose ps"
+    ```
 
-4. **检查防火墙**
-   - 确保 Windows 防火墙允许入站连接
-   - 如果使用第三方防火墙，请添加例外
+4.  **Check Firewall**
+    -   Ensure Windows Firewall allows inbound connections.
+    -   If using a third-party firewall, add an exception.
 
-5. **测试本地连接**
-   ```powershell
-   Test-NetConnection -ComputerName 192.168.16.88 -Port 1935
-   ```
+5.  **Test Local Connection**
+    ```powershell
+    Test-NetConnection -ComputerName 192.168.16.88 -Port 1935
+    ```
 
-### 问题：端口已被占用
+### Issue: Port is already in use
 
-如果端口被其他程序占用，查找占用进程：
+If a port is occupied by another program, find the process using it:
 
 ```powershell
 netstat -ano | findstr :1935
 ```
 
-然后终止该进程或更改 SRS 端口。
+Then terminate the process or change the SRS port.
 
-## 替代方案：使用 Host 网络模式
+## Alternative: Using Host Network Mode
 
-如果端口转发仍然有问题，可以修改 Docker Compose 配置使用 Host 网络模式：
+If port forwarding is still problematic, you can modify the Docker Compose configuration to use host network mode:
 
 ```yaml
 # docker-compose.yml
@@ -154,18 +154,18 @@ services:
       - ./srs.conf:/usr/local/srs/conf/srs.conf
 ```
 
-**注意**: Host 网络模式在 Windows WSL2 上可能不完全支持。
+**Note**: Host network mode may not be fully supported on Windows WSL2.
 
-## 当前配置状态
+## Current Configuration Status
 
-✅ **端口 1935** (RTMP): 已配置  
-✅ **端口 8080** (HTTP-FLV): 已配置  
-⚠️ **端口 1985** (HTTP API): 需要手动添加（可选）
+✅ **Port 1935** (RTMP): Configured
+✅ **Port 8080** (HTTP-FLV): Configured
+⚠️ **Port 1985** (HTTP API): Needs to be added manually (optional)
 
-现在可以使用以下配置推流：
+You can now use the following configuration to stream:
 - **RTMP URL**: `rtmp://192.168.16.88:1935/thinklet.squid.run`
 - **Stream Key**: `test_stream`
-- **完整地址**: `rtmp://192.168.16.88:1935/thinklet.squid.run/test_stream`
+- **Full Address**: `rtmp://192.168.16.88:1935/thinklet.squid.run/test_stream`
 
 
 
