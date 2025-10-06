@@ -11,4 +11,4 @@ local.properties
 /github.properties
 streaming/node_modules
 streaming/devices.json
-streaming/video
+streaming/src/video
