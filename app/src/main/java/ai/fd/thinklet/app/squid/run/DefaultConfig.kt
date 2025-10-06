@@ -15,7 +15,7 @@ object DefaultConfig {
     const val DEFAULT_LONG_SIDE = 1920
     const val DEFAULT_SHORT_SIDE = 1080
     const val DEFAULT_ORIENTATION = "landscape" // "landscape" or "portrait"
-    const val DEFAULT_VIDEO_BITRATE = 4096 // kbps
+    const val DEFAULT_VIDEO_BITRATE = 2048 // kbps
     const val DEFAULT_VIDEO_FPS = 24 // fps
     
     // Audio Configuration

@@ -12,6 +12,7 @@ import android.util.Log
 import android.os.Build
 import android.os.Environment
 import android.view.Surface
+import android.widget.Toast
 import androidx.annotation.MainThread
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.AndroidViewModel
@@ -53,6 +54,8 @@ class MainViewModel(
     savedState: SavedStateHandle
 ) : AndroidViewModel(application) {
 
+    val ttsManager = TTSManager(application)
+    private val ledController = LedController(application)
     private val angle: Angle by lazy(LazyThreadSafetyMode.NONE, ::Angle)
 
     val streamUrl: String? = savedState.get<String>("streamUrl") ?: DefaultConfig.DEFAULT_STREAM_URL
@@ -491,6 +494,8 @@ class MainViewModel(
             return true
         }
 
+        ledController.startLedBlinking()
+
         try {
             // Generate recording file path
             val recordFolder = File(
@@ -518,14 +523,17 @@ class MainViewModel(
                                 // Duration timer removed - frontend now handles timing
                                 // recordingStartTime = System.currentTimeMillis()
                                 // startRecordingDurationTimer()
+                                ttsManager.speakRecordingStarted()
                                 streamingEventMutableSharedFlow.tryEmit(
                                     StreamingEvent("Recording started: $recordPath")
                                 )
                             }
                             RecordController.Status.STOPPED -> {
                                 _isRecording.value = false
+                                ledController.stopLedBlinking()
                                 // Duration timer removed - frontend now handles timing
                                 // stopRecordingDurationTimer()
+                                ttsManager.speakRecordingFinished()
                                 streamingEventMutableSharedFlow.tryEmit(
                                     StreamingEvent("Recording stopped: $recordPath")
                                 )
@@ -588,6 +596,7 @@ class MainViewModel(
                 StreamingEvent("Failed to start recording: ${e.message}")
             )
             _isRecording.value = false
+            ledController.stopLedBlinking()
             return false
         }
     }
@@ -849,6 +858,11 @@ class MainViewModel(
         
         // 清理所有资源
         releaseCamera()
+        ttsManager.shutdown()
+    }
+
+    fun showToast(message: String) {
+        Toast.makeText(application, message, Toast.LENGTH_LONG).show()
     }
 
     companion object {

@@ -36,7 +36,7 @@ object ConfigHelper {
             "longSide" to 1280,
             "shortSide" to 720,
             "orientation" to "landscape",
-            "videoBitrate" to 4096,
+            "videoBitrate" to 2048,
             "audioSampleRate" to 48000,
             "audioBitrate" to 128,
             "audioChannel" to "stereo",

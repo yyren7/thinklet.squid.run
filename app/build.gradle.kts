@@ -64,6 +64,7 @@ dependencies {
     implementation(libs.rootencoder.common)
     implementation(thinkletLibs.sdk.maintenance)
     implementation(thinkletLibs.sdk.audio)
+    implementation(thinkletLibs.sdk.led)
     implementation("org.nanohttpd:nanohttpd:2.3.1")
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)

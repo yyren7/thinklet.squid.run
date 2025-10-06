@@ -8,6 +8,8 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.os.VibrationEffect
 import android.os.VibrationEffect.DEFAULT_AMPLITUDE
 import android.os.Vibrator
@@ -28,6 +30,9 @@ import androidx.lifecycle.lifecycleScope
 import androidx.localbroadcastmanager.content.LocalBroadcastManager
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
+import ai.fd.thinklet.sdk.maintenance.power.PowerController
+import ai.fd.thinklet.sdk.maintenance.launcher.Extension
+import android.util.Log
 
 class MainActivity : AppCompatActivity() {
 
@@ -55,6 +60,9 @@ class MainActivity : AppCompatActivity() {
     private var previewBinding: PreviewBinding? = null
     private var isPreviewInflated = false
 
+    private val handler = Handler(Looper.getMainLooper())
+    private lateinit var longPressRunnable: Runnable
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
@@ -65,6 +73,28 @@ class MainActivity : AppCompatActivity() {
             v.setPadding(systemBars.left, systemBars.top, systemBars.right, systemBars.bottom)
             insets
         }
+
+        longPressRunnable = Runnable {
+            handlePowerKeyPress()
+        }
+
+        try {
+            val ext = Extension()
+            val (pkg, cls) = ext.configure()
+            val myPkg = this.packageName
+            val myCls = this::class.java.name
+            if (pkg != myPkg || cls != myCls) {
+                ext.configure(myPkg, myCls)
+            }
+            if (!ext.isAutoLaunchMode()) {
+                ext.enableAutoLaunchMode()
+            }
+        } catch (e: Exception) {
+            Log.e("ThinkletExtension", "Failed to configure auto-launch", e)
+        }
+
+        vibrator.vibrate(VibrationEffect.createOneShot(200, DEFAULT_AMPLITUDE))
+        viewModel.ttsManager.speakApplicationPrepared()
 
         if (viewModel.streamKey.value.isNullOrBlank()) {
             viewModel.updateStreamKey(statusReportingManager.deviceId)
@@ -246,8 +276,62 @@ class MainActivity : AppCompatActivity() {
                 toggleAudioMute()
                 return true
             }
+            KeyEvent.KEYCODE_POWER -> {
+                return handlePowerKeyDown(event)
+            }
         }
         return super.onKeyDown(keyCode, event)
+    }
+
+    override fun onKeyUp(keyCode: Int, event: KeyEvent?): Boolean {
+        return when (keyCode) {
+            KeyEvent.KEYCODE_POWER -> handlePowerKeyUp()
+            KeyEvent.KEYCODE_VOLUME_UP -> handleVolumeUpKeyPress()
+            KeyEvent.KEYCODE_VOLUME_DOWN -> handleVolumeDownKeyUp()
+            else -> super.onKeyUp(keyCode, event)
+        }
+    }
+
+    private fun handlePowerKeyDown(event: KeyEvent?): Boolean {
+        if (event != null && event.repeatCount == 0) {
+            handler.postDelayed(longPressRunnable, 2000)
+        }
+        return true
+    }
+
+    private fun handlePowerKeyUp(): Boolean {
+        handler.removeCallbacks(longPressRunnable)
+        return true
+    }
+
+    private fun handlePowerKeyPress() {
+        Log.d("PowerKey", "Long press on power button detected. Testing vibration.")
+        // 1. 震动反馈
+        val timings = longArrayOf(0, 200, 200, 200)
+        val amplitudes = intArrayOf(0, DEFAULT_AMPLITUDE, 0, DEFAULT_AMPLITUDE)
+        vibrator.vibrate(VibrationEffect.createWaveform(timings, amplitudes, -1))
+
+        // 2. TTS 语音播报
+        viewModel.ttsManager.speakPowerDown()
+        try {
+            Thread.sleep(1000)
+        } catch (e: InterruptedException) {
+            Log.e("PowerKey", "TTS wait interrupted", e)
+        }
+
+        // 3. 执行关机
+        PowerController().shutdown(this, wait = 1000 /* max wait 1s */)
+    }
+
+    private fun handleVolumeUpKeyPress(): Boolean {
+        val statusMessage = viewModel.ttsManager.getBatteryAndNetworkStatusMessage()
+        viewModel.showToast(statusMessage)
+        viewModel.ttsManager.speakBatteryAndNetworkStatus()
+        return true
+    }
+
+    private fun handleVolumeDownKeyUp(): Boolean {
+        return true
     }
 
     private val streamingControlReceiver = object : BroadcastReceiver() {

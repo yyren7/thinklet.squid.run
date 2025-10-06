@@ -21,7 +21,9 @@ class FileTransferService {
         this.activeDownloads = new Map(); // Active downloads
         this.downloadQueue = []; // Download queue
         this.pausedTasks = new Map(); // Paused tasks (retry limit reached)
+        this.completedTasks = new Map(); // Store completed or failed tasks
         this.maxConcurrentDownloads = 2;
+        this.deleteAfterTransfer = false; // Control whether to delete files on the Android client after successful transfer
         
         // Ensure video directory exists
         this.ensureDirectoryExists(this.videoBasePath);
@@ -102,8 +104,8 @@ class FileTransferService {
 
         // Check if the file already exists and is complete
         const targetPath = this.getTargetFilePath(fileInfo);
-        if (await this.isFileComplete(targetPath, fileInfo.size)) {
-            // console.log(`✅ File ${fileInfo.name} already exists and is complete, skipping download`);
+        if (fs.existsSync(targetPath)) {
+            console.log(`✅ File ${fileInfo.name} already exists locally, skipping download.`);
             // If the file is complete, remove it from paused tasks (if it exists)
             this.pausedTasks.delete(taskId);
             return false;
@@ -304,19 +306,25 @@ class FileTransferService {
 
             console.log(`✅ File verification passed: ${fileInfo.name}`);
             
-            // Delete file on Android client
-            await this.deleteRemoteFile(fileInfo);
+            if (this.deleteAfterTransfer) {
+                // Delete file on Android client
+                await this.deleteRemoteFile(fileInfo);
+            } else {
+                console.log('📂 Skipping remote file deletion as per configuration.');
+            }
 
             task.status = 'completed';
             task.progress = 100;
             task.md5 = localMd5;
             this.broadcastProgress(task);
+            this.completedTasks.set(task.id, task); // Keep completed task in history
 
         } catch (error) {
             console.error(`❌ File verification failed: ${fileInfo.name}`, error.message);
             task.error = error.message;
             task.status = 'verification_failed';
             this.broadcastProgress(task);
+            this.completedTasks.set(task.id, task); // Keep failed task in history
             
             // Delete corrupted file
             if (fs.existsSync(targetPath)) {
@@ -507,6 +515,21 @@ class FileTransferService {
                 deviceId: task.fileInfo.deviceId,
                 streamKey: task.fileInfo.streamKey,
                 status: 'paused',
+                progress: task.progress,
+                downloadedBytes: task.downloadedBytes,
+                totalBytes: task.totalBytes,
+                error: task.error
+            });
+        }
+        
+        // Completed and Failed tasks
+        for (const task of this.completedTasks.values()) {
+            tasks.push({
+                id: task.id,
+                fileName: task.fileInfo.name,
+                deviceId: task.fileInfo.deviceId,
+                streamKey: task.fileInfo.streamKey,
+                status: task.status,
                 progress: task.progress,
                 downloadedBytes: task.downloadedBytes,
                 totalBytes: task.totalBytes,

@@ -2,6 +2,12 @@ let currentLang = localStorage.getItem('language') || 'en';
 
 // Update page language
 function updateLanguage(lang) {
+    // Fallback to English if the language is not supported
+    if (!i18n[lang]) {
+        console.warn(`Language "${lang}" not found. Falling back to "en".`);
+        lang = 'en';
+    }
+
     currentLang = lang;
     localStorage.setItem('language', lang);
     document.documentElement.lang = lang;
@@ -19,6 +25,12 @@ function updateLanguage(lang) {
     document.querySelectorAll('.language-btn').forEach(btn => {
         btn.classList.toggle('active', btn.getAttribute('data-lang') === lang);
     });
+
+    // Close the popover if it's open
+    const langMenuPopover = document.getElementById('lang-menu-popover');
+    if (langMenuPopover.classList.contains('show')) {
+        langMenuPopover.classList.remove('show');
+    }
 }
 
 // Get translated text
@@ -32,6 +44,8 @@ document.addEventListener('DOMContentLoaded', () => {
     const STREAM_BASE_URL = `http://${window.location.hostname}:8080/thinklet.squid.run`;
     const connectionStatus = document.getElementById('connection-status');
     const connectionText = document.getElementById('connection-text');
+
+    let statusTimeout; // Timer for hiding status
 
     const flvPlayers = {};
     let devices = [];
@@ -107,12 +121,26 @@ document.addEventListener('DOMContentLoaded', () => {
     updateLanguage(currentLang);
 
     // Language switch event
-    document.querySelectorAll('.language-btn').forEach(btn => {
-        btn.addEventListener('click', () => {
-            updateLanguage(btn.getAttribute('data-lang'));
-            // Re-render all device cards
+    const langMenuBtn = document.getElementById('lang-menu-btn');
+    const langMenuPopover = document.getElementById('lang-menu-popover');
+
+    langMenuBtn.addEventListener('click', (event) => {
+        event.stopPropagation();
+        langMenuPopover.classList.toggle('show');
+    });
+
+    document.addEventListener('click', (event) => {
+        if (!langMenuPopover.contains(event.target) && !langMenuBtn.contains(event.target)) {
+            langMenuPopover.classList.remove('show');
+        }
+    });
+
+    langMenuPopover.addEventListener('click', (event) => {
+        if (event.target.classList.contains('language-btn')) {
+            updateLanguage(event.target.getAttribute('data-lang'));
             devices.forEach(createOrUpdateCard);
-        });
+            langMenuPopover.classList.remove('show');
+        }
     });
 
     // Update statistics
@@ -173,12 +201,25 @@ document.addEventListener('DOMContentLoaded', () => {
             card.querySelector('.delete-btn').addEventListener('click', () => deleteDevice(device.id));
             card.querySelector('.start-stream-btn').addEventListener('click', () => controlStream(device.id, 'start'));
             card.querySelector('.stop-stream-btn').addEventListener('click', () => controlStream(device.id, 'stop'));
+            card.querySelector('.edit-name-btn').addEventListener('click', () => editDeviceName(device.id));
+            
+            // Clear completed transfers
+            card.querySelector('.clear-completed-btn').addEventListener('click', () => {
+                const deviceTransfers = Object.values(fileTransfers).filter(t => t.deviceId === device.id);
+                deviceTransfers.forEach(transfer => {
+                    if (['completed', 'failed', 'verification_failed'].includes(transfer.status)) {
+                        delete fileTransfers[transfer.id];
+                    }
+                });
+                updateDeviceTransfers(card, device.id);
+            });
         }
 
         // Update device info
         const streamKey = device.status?.streamKey || device.id;
-        card.querySelector('.device-name').textContent = `${t('deviceName')}: ${streamKey}`;
-        card.querySelector('.device-id').textContent = `${t('deviceId')}${device.id}`;
+        const deviceName = device.deviceName || streamKey;
+        card.querySelector('.device-name').textContent = deviceName;
+        card.querySelector('.device-id').textContent = `${t('streamKeyLabel')}: ${streamKey}`;
         
         // Update status
         const statusBadge = card.querySelector('.status-badge');
@@ -399,6 +440,32 @@ document.addEventListener('DOMContentLoaded', () => {
         updateStats();
     }
 
+    // Edit device name
+    async function editDeviceName(id) {
+        const device = devices.find(d => d.id === id);
+        if (!device) return;
+
+        const currentName = device.deviceName || device.status?.streamKey || device.id;
+        const newName = prompt(t('promptDeviceName'), currentName);
+
+        if (newName && newName !== currentName) {
+            try {
+                const response = await fetch('/update-device-name', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ id, name: newName })
+                });
+                const result = await response.json();
+                if (!result.success) {
+                    alert(`${t('updateFailed')}: ${t(result.message)}`);
+                }
+            } catch (error) {
+                console.error('Error updating device name:', error);
+                alert(t('updateError'));
+            }
+        }
+    }
+
     // Delete device
     async function deleteDevice(id) {
         if (!confirm(`${t('confirmDelete')} ${id}? ${t('irreversible')}`)) return;
@@ -459,8 +526,14 @@ document.addEventListener('DOMContentLoaded', () => {
         ws.onopen = () => {
             console.log('WebSocket connected');
             connectionStatus.classList.add('show', 'connected');
-            connectionStatus.classList.remove('disconnected');
+            connectionStatus.classList.remove('disconnected', 'hide-status');
             connectionText.textContent = t('connected');
+
+            // Hide status after 3 seconds
+            clearTimeout(statusTimeout);
+            statusTimeout = setTimeout(() => {
+                connectionStatus.classList.add('hide-status');
+            }, 3000);
 
             // Identify this client as a browser
             ws.send(JSON.stringify({ type: 'identify', client: 'browser' }));
@@ -503,8 +576,12 @@ document.addEventListener('DOMContentLoaded', () => {
         ws.onclose = () => {
             console.log('WebSocket disconnected. Reconnecting in 5 seconds...');
             connectionStatus.classList.add('show', 'disconnected');
-            connectionStatus.classList.remove('connected');
+            connectionStatus.classList.remove('connected', 'hide-status');
             connectionText.textContent = t('disconnected');
+
+            // Do not hide the disconnected status automatically
+            clearTimeout(statusTimeout);
+
             setTimeout(connectWebSocket, 5000);
         };
 
@@ -536,6 +613,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const transferSection = card.querySelector('.file-transfer-section');
         const transferList = transferSection.querySelector('.file-transfer-list');
         const transferBadge = transferSection.querySelector('.transfer-badge');
+        const clearBtn = transferSection.querySelector('.clear-completed-btn');
         
         // Get transfers for this specific device
         const deviceTransfers = Object.values(fileTransfers).filter(t => t.deviceId === deviceId);
@@ -543,9 +621,15 @@ document.addEventListener('DOMContentLoaded', () => {
         // Update badge count
         transferBadge.textContent = deviceTransfers.length;
         
+        // Show/hide clear button
+        const hasCompleted = deviceTransfers.some(t => ['completed', 'failed', 'verification_failed'].includes(t.status));
+        clearBtn.classList.toggle('visible', hasCompleted);
+        
         if (deviceTransfers.length === 0) {
             transferList.innerHTML = `<div class="empty-transfer-state">${t('noActiveTransfers')}</div>`;
             transferSection.classList.remove('has-transfers');
+            // Keep the list expanded if it was already
+            // transferSection.classList.remove('expanded'); 
             return;
         }
         
@@ -589,6 +673,7 @@ document.addEventListener('DOMContentLoaded', () => {
         }).join('');
         
         // Auto-remove completed tasks after 2 minutes
+        /*
         deviceTransfers.forEach(transfer => {
             if (transfer.status === 'completed' && !transfer.cleanupScheduled) {
                 transfer.cleanupScheduled = true;
@@ -598,6 +683,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 }, 120000);
             }
         });
+        */
     }
 
     initializeDashboard();

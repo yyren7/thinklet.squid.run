@@ -66,7 +66,11 @@ const i18n = {
         noActiveTransfers: 'No active transfers',
         resumeOnOnline: '⏳ Will resume automatically when device is online',
         errorLabel: 'Error',
-        scanFiles: '📁 Scan Files'
+        scanFiles: '📁 Scan Files',
+        editDeviceName: 'Edit Device Name',
+        promptDeviceName: 'Enter new device name:',
+        deviceNameUpdated: 'Device name updated',
+        streamKeyLabel: 'Stream Key'
     },
     zh: {
         title: '⚡ Thinklet 监控中心',
@@ -135,7 +139,11 @@ const i18n = {
         noActiveTransfers: '暂无传输任务',
         resumeOnOnline: '⏳ 等待设备上线后自动恢复',
         errorLabel: '错误',
-        scanFiles: '📁 扫描文件'
+        scanFiles: '📁 扫描文件',
+        editDeviceName: '编辑设备名称',
+        promptDeviceName: '请输入新的设备名称：',
+        deviceNameUpdated: '设备名称已更新',
+        streamKeyLabel: '推流密钥'
     },
     ja: {
         title: '⚡ Thinklet モニターセンター',
@@ -204,6 +212,10 @@ const i18n = {
         noActiveTransfers: 'アクティブな転送はありません',
         resumeOnOnline: '⏳ デバイスがオンラインになると自動的に再開します',
         errorLabel: 'エラー',
-        scanFiles: '📁 ファイルをスキャン'
+        scanFiles: '📁 ファイルをスキャン',
+        editDeviceName: 'デバイス名を編集',
+        promptDeviceName: '新しいデバイス名を入力してください：',
+        deviceNameUpdated: 'デバイス名が更新されました',
+        streamKeyLabel: 'ストリームキー'
     }
 };

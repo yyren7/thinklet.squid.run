@@ -96,6 +96,33 @@ const server = http.createServer((req, res) => {
         return;
     }
 
+    // API endpoint to update device name
+    if (pathname === '/update-device-name' && req.method === 'POST') {
+        let body = '';
+        req.on('data', chunk => {
+            body += chunk.toString();
+        });
+        req.on('end', () => {
+            try {
+                const { id, name } = JSON.parse(body);
+                if (devices[id]) {
+                    devices[id].deviceName = name;
+                    saveDevicesToFile();
+                    broadcastToBrowsers({ type: 'deviceUpdate', payload: devices[id] });
+                    res.writeHead(200, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({ success: true, message: 'deviceNameUpdated' }));
+                } else {
+                    res.writeHead(404, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({ success: false, message: 'deviceNotFound' }));
+                }
+            } catch (e) {
+                res.writeHead(400, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ success: false, message: 'badRequest' }));
+            }
+        });
+        return;
+    }
+
     // API endpoints for stream control
     if ((pathname === '/start-stream' || pathname === '/stop-stream') && req.method === 'POST') {
         let body = '';
@@ -307,7 +334,9 @@ wss.on('connection', ws => {
                     isOnline: true,
                     status: data.status,
                     ip: ip || devices[deviceId]?.ip,
-                    recordingStartTime: recordingStartTime
+                    recordingStartTime: recordingStartTime,
+                    // Preserve existing deviceName if it's not in the payload
+                    deviceName: devices[deviceId]?.deviceName || null
                 };
                 
                 saveDevicesToFile();
