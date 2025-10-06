@@ -6,9 +6,9 @@ const { URL } = require('url');
 const FileTransferService = require('./file-transfer-service');
 
 const PORT = 8000;
-const PUBLIC_DIR = path.join(__dirname);
-const DEVICES_FILE = path.join(__dirname, 'devices.json');
-const VIDEO_DIR = path.join(__dirname, 'video');
+const PUBLIC_DIR = path.join(__dirname, '..', 'public');
+const DEVICES_FILE = path.join(__dirname, '..', 'config', 'devices.json');
+const VIDEO_DIR = path.join(__dirname, '..', 'video');
 
 let devices = {}; // { deviceId: { id, lastSeen, isOnline, status: {} } }
 
@@ -26,8 +26,13 @@ try {
 
 function saveDevicesToFile() {
     try {
+        // Ensure the config directory exists
+        const configDir = path.dirname(DEVICES_FILE);
+        if (!fs.existsSync(configDir)) {
+            fs.mkdirSync(configDir, { recursive: true });
+        }
         fs.writeFileSync(DEVICES_FILE, JSON.stringify(devices, null, 4));
-    } catch (err)        {
+    } catch (err) {
         console.error('❌ Failed to write to devices.json:', err);
     }
 }
@@ -55,10 +60,25 @@ const server = http.createServer((req, res) => {
     const requestUrl = new URL(req.url, `http://${req.headers.host}`);
     const pathname = requestUrl.pathname;
 
-    // API endpoint to get all devices
+    // API endpoint to get the list of devices
     if (pathname === '/devices' && req.method === 'GET') {
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify(Object.values(devices)));
+        return;
+    }
+
+    // Serve i18n.js from the public directory
+    if (pathname === '/i18n.js') {
+        const i18nPath = path.join(PUBLIC_DIR, 'i18n.js');
+        fs.readFile(i18nPath, (err, data) => {
+            if (err) {
+                res.writeHead(500);
+                res.end('Error loading i18n.js');
+                return;
+            }
+            res.writeHead(200, { 'Content-Type': 'application/javascript' });
+            res.end(data);
+        });
         return;
     }
 
@@ -399,6 +419,9 @@ wss.on('connection', ws => {
 server.listen(PORT, () => {
     console.log(`✅ HTTP server started on port ${PORT}`);
     console.log(`🔗 Open http://localhost:${PORT} in your browser`);
+    console.log(`📁 Devices file: ${DEVICES_FILE}`);
+    console.log(`📂 Public directory: ${PUBLIC_DIR}`);
+    console.log(`📹 Video directory: ${VIDEO_DIR}`);
 });
 
 

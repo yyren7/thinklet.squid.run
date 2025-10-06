@@ -16,7 +16,7 @@ const axios = require('axios');
 
 class FileTransferService {
     constructor(videoBasePath, wsBroadcast) {
-        this.videoBasePath = videoBasePath || path.join(__dirname, 'video');
+        this.videoBasePath = videoBasePath || path.join(__dirname, '..', 'video');
         this.wsBroadcast = wsBroadcast; // WebSocket broadcast function
         this.activeDownloads = new Map(); // Active downloads
         this.downloadQueue = []; // Download queue

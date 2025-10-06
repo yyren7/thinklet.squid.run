@@ -1,10 +1,31 @@
 {
     "03eea09f-dfe5-487e-bb2a-9ebfda23f2ff": {
         "id": "03eea09f-dfe5-487e-bb2a-9ebfda23f2ff",
-        "lastSeen": "2025-10-02T06:00:19.314Z",
+        "lastSeen": "2025-10-06T06:05:10.067Z",
         "isOnline": true,
         "status": {
-            "batteryLevel": 100,
+            "batteryLevel": 97,
+            "fileServerEnabled": false,
+            "fileServerPort": 8889,
+            "isCharging": true,
+            "isOnline": true,
+            "isRecording": false,
+            "isStreaming": true,
+            "isStreamingReady": true,
+            "recordingDurationMs": 0,
+            "streamKey": "device1",
+            "wifiSignalStrength": -63
+        },
+        "ip": "192.168.16.182",
+        "recordingStartTime": null,
+        "deviceName": "Device1"
+    },
+    "acb90cd6-cd9c-44c0-9d44-54f8f0eb8246": {
+        "id": "acb90cd6-cd9c-44c0-9d44-54f8f0eb8246",
+        "lastSeen": "2025-10-06T06:05:32.293Z",
+        "isOnline": true,
+        "status": {
+            "batteryLevel": 74,
             "fileServerEnabled": true,
             "fileServerPort": 8889,
             "isCharging": true,
@@ -13,27 +34,12 @@
             "isStreaming": false,
             "isStreamingReady": true,
             "recordingDurationMs": 0,
-            "streamKey": "device1",
-            "wifiSignalStrength": -67
-        },
-        "ip": "192.168.16.182",
-        "recordingStartTime": null
-    },
-    "acb90cd6-cd9c-44c0-9d44-54f8f0eb8246": {
-        "id": "acb90cd6-cd9c-44c0-9d44-54f8f0eb8246",
-        "lastSeen": "2025-10-01T08:46:10.370Z",
-        "isOnline": false,
-        "status": {
-            "batteryLevel": 100,
-            "isCharging": true,
-            "isOnline": true,
-            "isRecording": false,
-            "isStreaming": false,
-            "isStreamingReady": true,
-            "recordingDurationMs": 0,
             "streamKey": "device2",
-            "wifiSignalStrength": -63
-        }
+            "wifiSignalStrength": -68
+        },
+        "ip": "192.168.16.87",
+        "recordingStartTime": null,
+        "deviceName": "Device2"
     },
     "a1b90cd6-cd9c-44c0-9d44-54f8f0eb8246": {
         "id": "a1b90cd6-cd9c-44c0-9d44-54f8f0eb8246",

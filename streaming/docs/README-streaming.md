@@ -23,7 +23,36 @@ This solution supports **receiving streams from multiple different devices simul
 
 ## Requirements
 
-- [Docker](https://www.docker.com/get-started) and [Docker Compose](https://docs.docker.com/compose/install/)
+### 必备环境
+
+- **Windows 10/11** 操作系统
+- **WSL 2** (Windows Subsystem for Linux 2)
+  - 确保已安装 Ubuntu 或其他 Linux 发行版
+  - 使用 `wsl -l -v` 检查版本必须为 `2`
+- **Rancher Desktop** 或 **Docker Desktop** (推荐 Rancher Desktop)
+  - ⚠️ **重要**：不要在 WSL 内部手动安装 Docker
+  - ✅ 必须在 Rancher Desktop 设置中启用 WSL 集成（见下方配置步骤）
+- **Node.js** (v16 或更高版本)
+
+### Rancher Desktop 配置步骤
+
+1. **安装 Rancher Desktop**
+   - 下载地址：https://rancherdesktop.io/
+   
+2. **配置 WSL 集成**（关键步骤）
+   - 打开 Rancher Desktop
+   - 进入 **Preferences → WSL**
+   - ✅ 勾选你的 WSL 发行版（如 `Ubuntu`）
+   - ❌ 不要勾选 `rancher-desktop` 或 `rancher-desktop-data`
+   - 保存设置并等待 Rancher Desktop 重启
+
+3. **验证配置**
+   - 打开 Ubuntu WSL 终端
+   - 运行 `docker --version`
+   - 应该看到类似 `Docker version 28.3.3-rd` 的输出（注意 `-rd` 后缀）
+
+> **为什么不在 WSL 内安装 Docker？**  
+> Rancher Desktop 提供了统一的 Docker 环境管理，避免了环境冲突和网络配置问题。所有通过 WSL 运行的容器都会显示在 Rancher Desktop 的图形界面中，方便管理。
 
 ## Quick Start
 
@@ -36,42 +65,43 @@ You need to know the IP address of the computer running the SRS server on your l
 
 In the following steps, we will assume your IP address is `192.168.16.88`. Please replace it with your actual IP address.
 
-### 2. Start the SRS Server
+### 2. 一键启动所有服务（推荐方式）⭐
 
-**Important**: If you are using WSL 2 on Windows to run Docker, make sure to execute all `docker` commands from the **WSL terminal**.
+我们提供了**完全自动化**的启动脚本，无需手动配置任何网络或防火墙设置。
 
-In the `streaming` directory, run the following command to start the SRS server:
+#### 使用自动化启动脚本
+
+1. **确保 Rancher Desktop 正在运行**
+
+2. **在文件资源管理器中**，进入 `streaming` 文件夹
+
+3. **双击 `Start-Streaming-Auto.bat` 文件**
+
+4. 当 Windows 弹出 UAC 权限请求时，点击**"是"**
+
+5. 脚本会自动完成以下所有操作：
+   - ✅ 检测 WSL2 IP 地址
+   - ✅ 配置网络端口转发（1935, 8080, 1985, 8000）
+   - ✅ 设置 Windows 防火墙规则
+   - ✅ 启动 SRS Docker 容器
+   - ✅ 启动 Node.js WebSocket 服务器
+   - ✅ 验证所有服务是否正常运行
+
+6. 看到绿色的 **"SUCCESS"** 消息后，所有服务就已就绪！
+
+> 💡 **提示**：详细的启动说明请参见 [QUICK-START.md](./QUICK-START.md)
+
+#### 手动启动方式（仅用于调试）
+
+如果你需要手动控制服务启动过程：
 
 ```bash
+# 在 WSL 终端中
+cd /mnt/c/Users/<你的用户名>/thinklet.squid.run/streaming
 docker compose up -d
 ```
 
-#### ⚠️ WSL2 Network Configuration (Required for Windows Users)
-
-If you are running Docker on Windows with WSL2, you **must configure port forwarding**, otherwise, Android devices will not be able to connect to the SRS server.
-
-**Quick Setup** (run PowerShell as an administrator):
-```powershell
-cd C:\Users\J100052060\thinklet.squid.run\streaming
-.\setup-wsl2-port-forwarding.ps1
-```
-
-For detailed instructions, please see [`WSL2-Network-Setup.md`](./WSL2-Network-Setup.md)
-
-**Verify the configuration was successful**:
-```powershell
-netsh interface portproxy show v4tov4
-```
-
-You should see forwarding rules for ports 1935 and 8080.
-
-You can check if the service is running correctly with the following command:
-
-```bash
-docker compose ps
-```
-
-If everything is normal, you should see the `srs-server` container running (Up).
+然后在 Windows PowerShell 中手动运行网络配置和 Node.js 服务器（不推荐，建议使用自动化脚本）。
 
 ### 3. Configure the Android Streaming Client
 
@@ -155,47 +185,43 @@ To stop the SRS server, run the following command in the `streaming` directory:
 docker compose down
 ```
 
-## WSL Network Configuration (Important!)
+## 故障排查
 
-If you are running Docker in a **Windows WSL 2** environment, you need to perform additional network configuration to allow devices on the local network (like your phone) to connect to the SRS server.
+### 问题：Rancher Desktop 提示 "The rancher-desktop WSL distribution is not meant to be used..."
 
-You need to **open PowerShell as an administrator** to execute the following network configuration commands, not in the WSL terminal.
+**原因**：你可能在错误的 WSL 发行版中运行命令。
 
-### One-Time Setup (only needs to be done once)
+**解决方案**：
+1. 使用 `Start-Streaming-Auto.bat` 脚本启动（推荐）
+2. 或者确保在 Rancher Desktop 的 WSL 集成设置中勾选了你的 Ubuntu 发行版
 
-**Open PowerShell as an administrator**, then execute the following commands:
+### 问题：Docker 命令找不到
 
-1. **Get WSL IP Address**:
-   ```bash
-   wsl -- ip addr show eth0 | grep 'inet ' | awk '{print $2}' | cut -d/ -f1
-   ```
-   Note down the output IP address (e.g., `172.26.136.132`)
+**解决方案**：
+1. 确认 Rancher Desktop 正在运行
+2. 检查 WSL 集成配置（Preferences → WSL → 勾选 Ubuntu）
+3. 重启 WSL：`wsl --shutdown`（在 Windows PowerShell 中运行）
+4. 在 Ubuntu 终端中验证：`docker --version` 应显示 `-rd` 后缀
 
-2. **Set up Port Forwarding** (replace `172.26.136.132` with the actual IP from the previous step):
+### 问题：Android 设备无法连接
+
+**解决方案**：
+1. 确保使用了 `Start-Streaming-Auto.bat` 启动服务
+2. 检查防火墙规则是否已创建：
    ```powershell
-   netsh interface portproxy add v4tov4 listenport=1935 listenaddress=0.0.0.0 connectport=1935 connectaddress=172.26.136.132
+   Get-NetFirewallRule -DisplayName "Thinklet Streaming Environment"
    ```
-
-3. **Add Firewall Rule**:
+3. 检查端口转发是否已配置：
    ```powershell
-   netsh advfirewall firewall add rule name="Allow SRS RTMP" dir=in action=allow protocol=TCP localport=1935
+   netsh interface portproxy show v4tov4
    ```
 
-4. **Verify Setup**:
-   ```powershell
-   netsh interface portproxy show all
-   ```
+### 问题：重启电脑后无法连接
 
-### If the WSL IP Changes
+**原因**：WSL IP 地址可能已更改。
 
-The WSL IP address may change after a reboot. If you find the connection failing, please:
-
-1. Get the new WSL IP address
-2. Delete the old port forwarding rule:
-   ```powershell
-   netsh interface portproxy delete v4tov4 listenport=1935 listenaddress=0.0.0.0
-   ```
-3. Re-add the port forwarding rule with the new IP
+**解决方案**：
+- 重新运行 `Start-Streaming-Auto.bat` 脚本，它会自动更新所有配置
 
 ## Daily Usage Management
 
