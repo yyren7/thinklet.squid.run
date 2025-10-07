@@ -94,7 +94,6 @@ class MainActivity : AppCompatActivity() {
         }
 
         vibrator.vibrate(VibrationEffect.createOneShot(200, DEFAULT_AMPLITUDE))
-        viewModel.ttsManager.speakApplicationPrepared()
 
         if (viewModel.streamKey.value.isNullOrBlank()) {
             viewModel.updateStreamKey(statusReportingManager.deviceId)
@@ -281,6 +280,9 @@ class MainActivity : AppCompatActivity() {
 
         statusReportingManager.start()
         LocalBroadcastManager.getInstance(this).registerReceiver(streamingControlReceiver, IntentFilter("streaming-control"))
+        
+        // TTS 播报 app 已准备好 - 放在最后确保 TTS 已初始化完成
+        viewModel.ttsManager.speakApplicationPrepared()
     }
 
     override fun onDestroy() {

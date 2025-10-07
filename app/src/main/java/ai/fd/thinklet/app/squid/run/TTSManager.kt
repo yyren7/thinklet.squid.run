@@ -8,6 +8,8 @@ import android.net.wifi.WifiInfo
 import android.net.wifi.WifiManager
 import android.os.BatteryManager
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import android.speech.tts.TextToSpeech
 import android.util.Log
 import java.util.*
@@ -15,6 +17,7 @@ import java.util.*
 class TTSManager(private val context: Context) : TextToSpeech.OnInitListener {
     private lateinit var tts: TextToSpeech
     private var isInitialized = false
+    private val handler = Handler(Looper.getMainLooper())
 
     init {
         try {
@@ -60,7 +63,32 @@ class TTSManager(private val context: Context) : TextToSpeech.OnInitListener {
     }
 
     fun speakApplicationPrepared() {
-        speak("application prepared", utteranceId = "application_prepared")
+        speakWithRetry("application prepared", utteranceId = "application_prepared", maxRetries = 5, delayMs = 500)
+    }
+    
+    /**
+     * 带重试机制的TTS播报，用于处理TTS异步初始化的情况
+     */
+    private fun speakWithRetry(
+        message: String, 
+        utteranceId: String? = null, 
+        maxRetries: Int = 3, 
+        delayMs: Long = 300,
+        currentRetry: Int = 0
+    ) {
+        if (isInitialized) {
+            speak(message, utteranceId = utteranceId)
+            return
+        }
+        
+        if (currentRetry >= maxRetries) {
+            Log.w("TTSManager", "Failed to speak after $maxRetries retries: $message")
+            return
+        }
+        
+        handler.postDelayed({
+            speakWithRetry(message, utteranceId, maxRetries, delayMs, currentRetry + 1)
+        }, delayMs)
     }
 
     fun getBatteryAndNetworkStatusMessage(): String {
@@ -112,6 +140,7 @@ class TTSManager(private val context: Context) : TextToSpeech.OnInitListener {
     }
 
     fun shutdown() {
+        handler.removeCallbacksAndMessages(null) // 清理所有待处理的回调
         if (this::tts.isInitialized) {
             tts.stop()
             tts.shutdown()
