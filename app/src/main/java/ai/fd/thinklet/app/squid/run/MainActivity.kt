@@ -284,9 +284,27 @@ class MainActivity : AppCompatActivity() {
     }
 
     override fun onDestroy() {
+        Log.i("MainActivity", "🛑 Activity is being destroyed, cleaning up resources...")
+        
+        // 先注销广播接收器，避免在清理过程中收到新的命令
+        try {
+            LocalBroadcastManager.getInstance(this).unregisterReceiver(streamingControlReceiver)
+            Log.d("MainActivity", "✅ StreamingControlReceiver unregistered")
+        } catch (e: Exception) {
+            Log.e("MainActivity", "❌ Failed to unregister receiver", e)
+        }
+        
+        // 停止 StatusReportingManager 并等待资源释放完成
+        // 这个调用是同步的，会等待 WebSocket 和 FileTransferServer 完全停止
+        try {
+            statusReportingManager.stop()
+            Log.i("MainActivity", "✅ StatusReportingManager stopped")
+        } catch (e: Exception) {
+            Log.e("MainActivity", "❌ Failed to stop StatusReportingManager", e)
+        }
+        
+        Log.i("MainActivity", "✅ Activity cleanup completed")
         super.onDestroy()
-        statusReportingManager.stop()
-        LocalBroadcastManager.getInstance(this).unregisterReceiver(streamingControlReceiver)
     }
 
     override fun onResume() {

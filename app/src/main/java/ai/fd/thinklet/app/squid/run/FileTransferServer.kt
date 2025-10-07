@@ -263,10 +263,24 @@ class FileTransferServer(
 
     /**
      * Stop the server.
+     * 同步等待服务器完全停止并释放端口
      */
     fun stopServer() {
-        stop()
-        Log.i(TAG, "File transfer server stopped")
+        try {
+            Log.i(TAG, "🛑 Stopping file transfer server on port $listeningPort...")
+            
+            // NanoHTTPD.stop() 会关闭服务器 socket 并停止接受新连接
+            stop()
+            
+            // 等待一段时间确保所有连接都关闭，端口被释放
+            // NanoHTTPD 的 stop() 是异步的，需要给它时间完成清理
+            Thread.sleep(200)
+            
+            Log.i(TAG, "✅ File transfer server stopped, port $listeningPort released")
+        } catch (e: Exception) {
+            Log.e(TAG, "❌ Error while stopping file transfer server", e)
+            throw e
+        }
     }
 }
 

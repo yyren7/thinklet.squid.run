@@ -64,6 +64,7 @@ class StatusReportingManager(
         FileTransferServer(context, port = 8889)
     }
     private var fileServerEnabled = false
+    private var fileServerInitialized = false
 
     @Volatile
     private var isStarted = false
@@ -153,7 +154,8 @@ class StatusReportingManager(
         try {
             fileTransferServer.startServer()
             fileServerEnabled = true
-            Log.i(TAG, "✅ File transfer server started")
+            fileServerInitialized = true
+            Log.i(TAG, "✅ File transfer server started on port 8889")
         } catch (e: Exception) {
             Log.e(TAG, "❌ Failed to start file transfer server", e)
             fileServerEnabled = false
@@ -162,28 +164,76 @@ class StatusReportingManager(
     
     /**
      * Stop the file transfer server
+     * 同步等待服务器完全停止
      */
     private fun stopFileTransferServer() {
+        // 只有在服务器已经被初始化时才停止它
+        if (!fileServerInitialized) {
+            Log.d(TAG, "File transfer server was never started, skipping stop")
+            return
+        }
+        
         try {
+            Log.i(TAG, "🛑 Stopping file transfer server...")
             fileTransferServer.stopServer()
             fileServerEnabled = false
-            Log.i(TAG, "File transfer server stopped")
+            
+            // 等待一段时间确保端口完全释放
+            Thread.sleep(500)
+            Log.i(TAG, "✅ File transfer server stopped and port 8889 released")
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to stop file transfer server", e)
+            Log.e(TAG, "❌ Failed to stop file transfer server", e)
         }
     }
 
+    /**
+     * 停止 StatusReportingManager 并同步等待所有资源释放完成
+     */
     fun stop() {
-        isStarted = false
-        Log.d(TAG, "StatusReportingManager stopped.")
+        if (!isStarted) {
+            Log.d(TAG, "StatusReportingManager is already stopped.")
+            return
+        }
         
-        // Stop the file transfer server
+        Log.d(TAG, "🛑 Stopping StatusReportingManager...")
+        isStarted = false
+        
+        // 1. 取消定时器
+        try {
+            timer?.cancel()
+            timer?.purge()
+            timer = null
+            Log.d(TAG, "✅ Timer cancelled")
+        } catch (e: Exception) {
+            Log.e(TAG, "❌ Failed to cancel timer", e)
+        }
+        
+        // 2. 关闭 WebSocket 连接
+        try {
+            val ws = webSocket
+            if (ws != null) {
+                ws.close(1000, "Client initiated disconnect.")
+                // 等待 WebSocket 关闭完成
+                Thread.sleep(300)
+                webSocket = null
+                Log.d(TAG, "✅ WebSocket closed")
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "❌ Failed to close WebSocket", e)
+        }
+        
+        // 3. 停止文件传输服务器（关键！必须等待端口释放）
         stopFileTransferServer()
         
-        context.unregisterReceiver(powerConnectionReceiver)
+        // 4. 注销广播接收器
+        try {
+            context.unregisterReceiver(powerConnectionReceiver)
+            Log.d(TAG, "✅ BroadcastReceiver unregistered")
+        } catch (e: Exception) {
+            Log.e(TAG, "❌ Failed to unregister receiver", e)
+        }
         
-        webSocket?.close(1000, "Client initiated disconnect.")
-        timer?.cancel()
+        Log.i(TAG, "✅ StatusReportingManager stopped completely")
     }
 
     private fun connect() {
