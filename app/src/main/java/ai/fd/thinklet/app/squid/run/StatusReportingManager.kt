@@ -43,7 +43,7 @@ data class Command(val command: String)
 
 class StatusReportingManager(
     private val context: Context,
-    private val streamUrl: String?
+    private var streamUrl: String?
 ) {
 
     var isStreamingReady: Boolean = false
@@ -95,6 +95,21 @@ class StatusReportingManager(
             prefs.edit().putString("device_id", id).apply()
         }
         this.deviceId = id
+    }
+
+    fun updateStreamUrl(newStreamUrl: String?) {
+        if (this.streamUrl != newStreamUrl) {
+            this.streamUrl = newStreamUrl
+            Log.d(TAG, "Stream URL updated to: $newStreamUrl")
+            // 重新连接以使用新的 URL
+            reconnect()
+        }
+    }
+
+    private fun reconnect() {
+        // Stop the existing connection and timer, then start a new connection.
+        stop()
+        start()
     }
 
     fun updateStreamingReadyStatus(isReady: Boolean) {

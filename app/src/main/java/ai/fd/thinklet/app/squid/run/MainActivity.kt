@@ -38,11 +38,8 @@ class MainActivity : AppCompatActivity() {
 
     private val viewModel: MainViewModel by viewModels()
 
-    private val statusReportingManager by lazy {
-        StatusReportingManager(
-            context = this,
-            streamUrl = viewModel.streamUrl.value
-        )
+    private val statusReportingManager: StatusReportingManager by lazy {
+        (application as SquidRunApplication).statusReportingManager
     }
 
     private val binding: ActivityMainBinding by lazy(LazyThreadSafetyMode.NONE) {
@@ -110,6 +107,7 @@ class MainActivity : AppCompatActivity() {
         lifecycleScope.launch {
             viewModel.streamUrl.collectLatest { streamUrl ->
                 binding.streamUrl.text = streamUrl
+                statusReportingManager.updateStreamUrl(streamUrl)
             }
         }
 
@@ -278,7 +276,6 @@ class MainActivity : AppCompatActivity() {
             togglePreview()
         }
 
-        statusReportingManager.start()
         LocalBroadcastManager.getInstance(this).registerReceiver(streamingControlReceiver, IntentFilter("streaming-control"))
         
         // TTS 播报 app 已准备好 - 放在最后确保 TTS 已初始化完成
@@ -294,15 +291,6 @@ class MainActivity : AppCompatActivity() {
             Log.d("MainActivity", "✅ StreamingControlReceiver unregistered")
         } catch (e: Exception) {
             Log.e("MainActivity", "❌ Failed to unregister receiver", e)
-        }
-        
-        // 停止 StatusReportingManager 并等待资源释放完成
-        // 这个调用是同步的，会等待 WebSocket 和 FileTransferServer 完全停止
-        try {
-            statusReportingManager.stop()
-            Log.i("MainActivity", "✅ StatusReportingManager stopped")
-        } catch (e: Exception) {
-            Log.e("MainActivity", "❌ Failed to stop StatusReportingManager", e)
         }
         
         Log.i("MainActivity", "✅ Activity cleanup completed")

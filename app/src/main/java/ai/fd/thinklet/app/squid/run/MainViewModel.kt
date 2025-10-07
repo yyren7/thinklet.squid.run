@@ -54,7 +54,9 @@ class MainViewModel(
     savedState: SavedStateHandle
 ) : AndroidViewModel(application) {
 
-    val ttsManager = TTSManager(application)
+    val ttsManager: TTSManager by lazy {
+        (application as SquidRunApplication).ttsManager
+    }
     private val ledController = LedController(application)
     private val angle: Angle by lazy(LazyThreadSafetyMode.NONE, ::Angle)
 
@@ -901,7 +903,6 @@ class MainViewModel(
         
         // 清理所有资源
         releaseCamera()
-        ttsManager.shutdown()
     }
 
     fun showToast(message: String) {
