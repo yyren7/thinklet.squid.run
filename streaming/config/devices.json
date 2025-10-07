@@ -1,20 +1,20 @@
 {
     "03eea09f-dfe5-487e-bb2a-9ebfda23f2ff": {
         "id": "03eea09f-dfe5-487e-bb2a-9ebfda23f2ff",
-        "lastSeen": "2025-10-06T06:05:10.067Z",
-        "isOnline": true,
+        "lastSeen": "2025-10-06T07:31:13.338Z",
+        "isOnline": false,
         "status": {
-            "batteryLevel": 97,
+            "batteryLevel": 100,
             "fileServerEnabled": false,
             "fileServerPort": 8889,
             "isCharging": true,
             "isOnline": true,
             "isRecording": false,
-            "isStreaming": true,
+            "isStreaming": false,
             "isStreamingReady": true,
             "recordingDurationMs": 0,
             "streamKey": "device1",
-            "wifiSignalStrength": -63
+            "wifiSignalStrength": -65
         },
         "ip": "192.168.16.182",
         "recordingStartTime": null,
@@ -22,11 +22,11 @@
     },
     "acb90cd6-cd9c-44c0-9d44-54f8f0eb8246": {
         "id": "acb90cd6-cd9c-44c0-9d44-54f8f0eb8246",
-        "lastSeen": "2025-10-06T06:05:32.293Z",
-        "isOnline": true,
+        "lastSeen": "2025-10-06T08:12:40.964Z",
+        "isOnline": false,
         "status": {
-            "batteryLevel": 74,
-            "fileServerEnabled": true,
+            "batteryLevel": 100,
+            "fileServerEnabled": false,
             "fileServerPort": 8889,
             "isCharging": true,
             "isOnline": true,
@@ -35,7 +35,7 @@
             "isStreamingReady": true,
             "recordingDurationMs": 0,
             "streamKey": "device2",
-            "wifiSignalStrength": -68
+            "wifiSignalStrength": -64
         },
         "ip": "192.168.16.87",
         "recordingStartTime": null,

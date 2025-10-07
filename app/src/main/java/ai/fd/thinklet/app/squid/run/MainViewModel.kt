@@ -58,7 +58,18 @@ class MainViewModel(
     private val ledController = LedController(application)
     private val angle: Angle by lazy(LazyThreadSafetyMode.NONE, ::Angle)
 
-    val streamUrl: String? = savedState.get<String>("streamUrl") ?: DefaultConfig.DEFAULT_STREAM_URL
+    /**
+     * The server IP address for RTMP streaming.
+     */
+    private val _serverIp = MutableStateFlow<String?>(null)
+    val serverIp: StateFlow<String?> = _serverIp.asStateFlow()
+
+    /**
+     * The complete RTMP stream URL, dynamically generated from server IP.
+     */
+    val streamUrl: StateFlow<String> = _serverIp.map { ip ->
+        "rtmp://$ip:1935/thinklet.squid.run"
+    }.stateIn(viewModelScope, SharingStarted.Eagerly, "")
 
     /**
      * The key for RTMP streaming.
@@ -69,9 +80,35 @@ class MainViewModel(
     private val sharedPreferences: SharedPreferences = application.getSharedPreferences("StreamConfig", Context.MODE_PRIVATE)
 
     init {
+        // Extract IP address from DEFAULT_STREAM_URL or savedState
+        val defaultIp = extractIpFromUrl(DefaultConfig.DEFAULT_STREAM_URL) ?: "192.168.16.88"
+        val savedIp = savedState.get<String>("serverIp")
+        
+        _serverIp.value = sharedPreferences.getString("serverIp", null)
+            ?: savedIp
+            ?: defaultIp
+        
         _streamKey.value = sharedPreferences.getString("streamKey", null)
             ?: savedState.get<String>("streamKey")
             ?: DefaultConfig.DEFAULT_STREAM_KEY
+    }
+
+    /**
+     * Extract IP address from RTMP URL.
+     * Format: rtmp://IP:PORT/PATH
+     */
+    private fun extractIpFromUrl(url: String): String? {
+        return try {
+            val pattern = "rtmp://([^:]+):".toRegex()
+            pattern.find(url)?.groupValues?.get(1)
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    fun updateServerIp(newIp: String) {
+        _serverIp.value = newIp
+        sharedPreferences.edit().putString("serverIp", newIp).apply()
     }
 
     fun updateStreamKey(newStreamKey: String) {
@@ -123,12 +160,15 @@ class MainViewModel(
     private val _isPreviewActive: MutableStateFlow<Boolean> = MutableStateFlow(false)
     val isPreviewActive: StateFlow<Boolean> = _isPreviewActive.asStateFlow()
 
-    val isReadyForStreaming: StateFlow<Boolean> = streamKey.map { key ->
-        !streamUrl.isNullOrBlank() && !key.isNullOrBlank() && isAllPermissionGranted()
+    val isReadyForStreaming: StateFlow<Boolean> = kotlinx.coroutines.flow.combine(
+        streamUrl,
+        streamKey
+    ) { url, key ->
+        !url.isNullOrBlank() && !key.isNullOrBlank() && isAllPermissionGranted()
     }.stateIn(
         scope = viewModelScope,
         started = SharingStarted.Eagerly,
-        initialValue = !streamUrl.isNullOrBlank() && !_streamKey.value.isNullOrBlank() && isAllPermissionGranted()
+        initialValue = false
     )
 
     private val streamingEventMutableSharedFlow: MutableSharedFlow<StreamingEvent> =
@@ -193,7 +233,7 @@ class MainViewModel(
         if (_isPrepared.value) {
             return
         }
-        if (streamUrl == null || streamKey.value == null || !isAllPermissionGranted()) {
+        if (streamUrl.value.isBlank() || streamKey.value.isNullOrBlank() || !isAllPermissionGranted()) {
             _isPrepared.value = false
             return
         }
@@ -345,7 +385,10 @@ class MainViewModel(
 
     private fun maybeStartStreamingInternal(): Boolean {
         val streamSnapshot = stream
-        if (streamUrl == null || streamKey.value == null || streamSnapshot == null) {
+        val currentStreamUrl = streamUrl.value
+        val currentStreamKey = streamKey.value
+        
+        if (currentStreamUrl.isBlank() || currentStreamKey.isNullOrBlank() || streamSnapshot == null) {
             return false
         }
         
@@ -366,7 +409,7 @@ class MainViewModel(
             _connectionStatus.value = ConnectionStatus.IDLE
         }
         
-        streamSnapshot.startStream("$streamUrl/${streamKey.value}")
+        streamSnapshot.startStream("$currentStreamUrl/$currentStreamKey")
         return true
     }
     

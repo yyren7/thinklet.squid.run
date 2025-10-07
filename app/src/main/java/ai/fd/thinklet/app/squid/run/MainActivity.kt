@@ -41,7 +41,7 @@ class MainActivity : AppCompatActivity() {
     private val statusReportingManager by lazy {
         StatusReportingManager(
             context = this,
-            streamUrl = viewModel.streamUrl
+            streamUrl = viewModel.streamUrl.value
         )
     }
 
@@ -100,13 +100,28 @@ class MainActivity : AppCompatActivity() {
             viewModel.updateStreamKey(statusReportingManager.deviceId)
         }
 
-        binding.streamUrl.text = viewModel.streamUrl
+        // Observe and display server IP
+        lifecycleScope.launch {
+            viewModel.serverIp.collectLatest { serverIp ->
+                binding.serverIp.setText(serverIp)
+            }
+        }
+
+        // Observe and display stream URL (dynamically generated from server IP)
+        lifecycleScope.launch {
+            viewModel.streamUrl.collectLatest { streamUrl ->
+                binding.streamUrl.text = streamUrl
+            }
+        }
+
+        // Observe and display stream key
         lifecycleScope.launch {
             viewModel.streamKey.collectLatest { streamKey ->
                 binding.streamKey.setText(streamKey)
                 statusReportingManager.updateStreamKey(streamKey)
             }
         }
+
         binding.dimension.text =
             getString(R.string.dimension_text, viewModel.width, viewModel.height)
         binding.videoBitrate.text = (viewModel.videoBitrateBps / 1024).toString()
@@ -117,19 +132,53 @@ class MainActivity : AppCompatActivity() {
         binding.micMode.text = viewModel.micMode.argumentValue
         binding.permissionGranted.text = permissionHelper.areAllPermissionsGranted().toString()
 
-        binding.buttonSaveStreamKey.setOnClickListener {
-            val newStreamKey = binding.streamKey.text.toString()
+        // Save button click listener - saves both server IP and stream key
+        binding.buttonSaveConfig.setOnClickListener {
+            val newServerIp = binding.serverIp.text.toString().trim()
+            val newStreamKey = binding.streamKey.text.toString().trim()
+            
+            // Basic IP address validation
+            if (newServerIp.isEmpty()) {
+                viewModel.showToast("Server IP cannot be empty")
+                return@setOnClickListener
+            }
+            
+            // Simple IP format validation (basic check)
+            val ipPattern = "^\\d{1,3}(\\.\\d{1,3}){3}$".toRegex()
+            if (!newServerIp.matches(ipPattern)) {
+                viewModel.showToast("Invalid IP address format. Example: 192.168.1.100")
+                return@setOnClickListener
+            }
+            
+            if (newStreamKey.isEmpty()) {
+                viewModel.showToast("Stream key cannot be empty")
+                return@setOnClickListener
+            }
+            
+            // Save the configuration
+            viewModel.updateServerIp(newServerIp)
             viewModel.updateStreamKey(newStreamKey)
+            viewModel.showToast("Configuration saved successfully")
+            
+            // Disable the save button after saving
+            binding.buttonSaveConfig.isEnabled = false
         }
-        binding.buttonSaveStreamKey.isEnabled = false
+        binding.buttonSaveConfig.isEnabled = false
+
+        // Text change listeners to enable/disable save button
+        binding.serverIp.addTextChangedListener(object : android.text.TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
+            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}
+            override fun afterTextChanged(s: android.text.Editable?) {
+                checkIfConfigChanged()
+            }
+        })
 
         binding.streamKey.addTextChangedListener(object : android.text.TextWatcher {
             override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
-
             override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}
-
             override fun afterTextChanged(s: android.text.Editable?) {
-                binding.buttonSaveStreamKey.isEnabled = s.toString() != viewModel.streamKey.value
+                checkIfConfigChanged()
             }
         })
 
@@ -252,12 +301,25 @@ class MainActivity : AppCompatActivity() {
         super.onPause()
     }
 
+    /**
+     * Check if the server IP or stream key has been changed from saved values.
+     */
+    private fun checkIfConfigChanged() {
+        val currentServerIp = binding.serverIp.text.toString().trim()
+        val currentStreamKey = binding.streamKey.text.toString().trim()
+        val savedServerIp = viewModel.serverIp.value
+        val savedStreamKey = viewModel.streamKey.value
+        
+        val isChanged = currentServerIp != savedServerIp || currentStreamKey != savedStreamKey
+        binding.buttonSaveConfig.isEnabled = isChanged
+    }
+
     private fun maybeNotifyLaunchErrors() {
         if (!permissionHelper.areAllPermissionsGranted()) {
             vibrator.vibrate(createStaccatoVibrationEffect(2))
             return
         }
-        if (viewModel.streamUrl == null || viewModel.streamKey.value == null) {
+        if (viewModel.streamUrl.value.isBlank() || viewModel.streamKey.value.isNullOrBlank()) {
             vibrator.vibrate(createStaccatoVibrationEffect(3))
             return
         }
@@ -273,9 +335,15 @@ class MainActivity : AppCompatActivity() {
             }
 
             KeyEvent.KEYCODE_VOLUME_UP -> {
-                toggleAudioMute()
+                // Consume the event to prevent system volume change
                 return true
             }
+
+            KeyEvent.KEYCODE_VOLUME_DOWN -> {
+                // Consume the event to prevent system volume change
+                return true
+            }
+
             KeyEvent.KEYCODE_POWER -> {
                 return handlePowerKeyDown(event)
             }
