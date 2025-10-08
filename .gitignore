@@ -9,7 +9,7 @@
 .cxx
 local.properties
 /github.properties
-streaming/node_modules
-streaming/config/devices.json
-streaming/src/video
+streaming-backup/node_modules
+streaming-backup/config/devices.json
+streaming-backup/src/video
 thinklet_monitor.zip
