@@ -19,6 +19,11 @@ import java.util.concurrent.TimeUnit
 import kotlin.concurrent.timer
 import androidx.localbroadcastmanager.content.LocalBroadcastManager
 import android.content.BroadcastReceiver
+import android.os.Build
+import androidx.core.content.ContextCompat
+import android.Manifest
+import android.annotation.SuppressLint
+import android.content.pm.PackageManager
 
 data class DeviceStatus(
     val batteryLevel: Int,
@@ -58,7 +63,8 @@ class StatusReportingManager(
     private var timer: Timer? = null
     private val gson = Gson()
     val deviceId: String
-    
+    val deviceIdSource: String
+
     // File transfer server
     private val fileTransferServer: FileTransferServer by lazy {
         FileTransferServer(context, port = 8889)
@@ -88,13 +94,48 @@ class StatusReportingManager(
     }
 
     init {
-        val prefs = context.getSharedPreferences("device_prefs", Context.MODE_PRIVATE)
-        var id = prefs.getString("device_id", null)
-        if (id == null) {
-            id = UUID.randomUUID().toString()
-            prefs.edit().putString("device_id", id).apply()
-        }
+        val (id, source) = initializeDeviceId()
         this.deviceId = id
+        this.deviceIdSource = source
+    }
+
+    @SuppressLint("HardwareIds")
+    private fun initializeDeviceId(): Pair<String, String> {
+        val prefs = context.getSharedPreferences("device_prefs", Context.MODE_PRIVATE)
+
+        // Priority 1: Always try to get hardware serial if permission is granted.
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            if (ContextCompat.checkSelfPermission(context, Manifest.permission.READ_PHONE_STATE) == PackageManager.PERMISSION_GRANTED) {
+                try {
+                    val serial = Build.getSerial()
+                    if (serial != null && serial != Build.UNKNOWN && serial.isNotBlank()) {
+                        Log.i(TAG, "Using hardware serial as device ID. Overwriting previous ID if any.")
+                        // If the current saved ID is different, overwrite it.
+                        if (prefs.getString("device_id", null) != serial) {
+                            prefs.edit().putString("device_id", serial).apply()
+                        }
+                        return Pair(serial, "Hardware Serial")
+                    }
+                } catch (e: SecurityException) {
+                    Log.e(TAG, "Failed to get serial number due to security exception.", e)
+                }
+            } else {
+                Log.w(TAG, "READ_PHONE_STATE permission not granted. Cannot get serial number.")
+            }
+        }
+
+        // Priority 2: If serial is unavailable, use a previously saved ID.
+        val savedId = prefs.getString("device_id", null)
+        if (savedId != null) {
+            Log.i(TAG, "Using previously saved ID (could not get hardware serial).")
+            return Pair(savedId, "Generated UUID")
+        }
+
+        // Priority 3: If no ID has ever been saved, generate a new UUID.
+        Log.i(TAG, "Generating new UUID as device ID.")
+        val newId = UUID.randomUUID().toString()
+        prefs.edit().putString("device_id", newId).apply()
+        return Pair(newId, "Generated UUID")
     }
 
     fun updateStreamUrl(newStreamUrl: String?) {

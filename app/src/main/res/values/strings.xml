@@ -1,11 +1,13 @@
 <resources>
     <string name="app_name">thinklet.squid.run</string>
     <string name="launch_parameters">Launch Parameters</string>
-    <string name="label_server_ip">Server IP Address</string>
-    <string name="label_stream_url">Stream URL: </string>
-    <string name="label_stream_key">Stream Key: </string>
-    <string name="label_dimension">Video Dimension: </string>
-    <string name="label_video_bitrate">Video Bitrate (kbps): </string>
+    <string name="label_server_ip">Server IP</string>
+    <string name="label_stream_url">Stream URL</string>
+    <string name="label_device_id">Device ID (Stream Key)</string>
+    <string name="device_id_source_text">Source: %1$s</string>
+    <string name="label_stream_key">Stream Key</string>
+    <string name="label_dimension">Dimension</string>
+    <string name="label_video_bitrate">Video Bitrate(kbps)</string>
     <string name="label_sampling_rate">Audio Sampling Rate (kHz): </string>
     <string name="label_audio_bitrate">Audio Bitrate (kbps): </string>
     <string name="label_audio_channel">Audio Channel: </string>

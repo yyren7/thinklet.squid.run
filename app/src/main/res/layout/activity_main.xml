@@ -74,11 +74,39 @@
                         android:layout_marginBottom="8dp"
                         tools:text="rtmp://example.com" />
 
+                    <TextView
+                        android:id="@+id/label_device_id"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="@string/label_device_id"
+                        android:textAppearance="@style/TextAppearance.MaterialComponents.Subtitle1"
+                        android:layout_marginTop="8dp"/>
+
+                    <TextView
+                        android:id="@+id/device_id"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginStart="4dp"
+                        android:layout_marginBottom="8dp"
+                        android:textIsSelectable="true"
+                        tools:text="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" />
+
+                    <TextView
+                        android:id="@+id/device_id_source"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginStart="4dp"
+                        android:layout_marginBottom="8dp"
+                        android:textAppearance="@style/TextAppearance.MaterialComponents.Caption"
+                        tools:text="Source: Hardware Serial" />
+
                     <com.google.android.material.textfield.TextInputLayout
                         android:id="@+id/stream_key_layout"
                         style="@style/Widget.MaterialComponents.TextInputLayout.OutlinedBox"
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
+                        android:visibility="gone"
+                        tools:visibility="visible"
                         android:hint="@string/label_stream_key">
 
                         <com.google.android.material.textfield.TextInputEditText

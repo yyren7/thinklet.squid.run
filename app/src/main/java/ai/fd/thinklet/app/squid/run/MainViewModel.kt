@@ -89,10 +89,6 @@ class MainViewModel(
         _serverIp.value = sharedPreferences.getString("serverIp", null)
             ?: savedIp
             ?: defaultIp
-        
-        _streamKey.value = sharedPreferences.getString("streamKey", null)
-            ?: savedState.get<String>("streamKey")
-            ?: DefaultConfig.DEFAULT_STREAM_KEY
     }
 
     /**
@@ -113,9 +109,8 @@ class MainViewModel(
         sharedPreferences.edit().putString("serverIp", newIp).apply()
     }
 
-    fun updateStreamKey(newStreamKey: String) {
+    fun setStreamKey(newStreamKey: String) {
         _streamKey.value = newStreamKey
-        sharedPreferences.edit().putString("streamKey", newStreamKey).apply()
     }
 
     private val longSide: Int = savedState.get<Int>("longSide") ?: DefaultConfig.DEFAULT_LONG_SIDE

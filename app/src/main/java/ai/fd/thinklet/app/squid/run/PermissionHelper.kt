@@ -22,6 +22,7 @@ class PermissionHelper(private val activity: Activity) {
         val REQUIRED_PERMISSIONS = listOfNotNull(
             Manifest.permission.CAMERA,
             Manifest.permission.RECORD_AUDIO,
+            Manifest.permission.READ_PHONE_STATE,
             Manifest.permission.WRITE_EXTERNAL_STORAGE
                 .takeIf { Build.VERSION.SDK_INT <= Build.VERSION_CODES.P }
         )
@@ -76,6 +77,7 @@ class PermissionHelper(private val activity: Activity) {
             Manifest.permission.CAMERA -> "Camera"
             Manifest.permission.RECORD_AUDIO -> "Microphone"
             Manifest.permission.WRITE_EXTERNAL_STORAGE -> "Storage"
+            Manifest.permission.READ_PHONE_STATE -> "Phone State (for Device ID)"
             else -> permission
         }
     }

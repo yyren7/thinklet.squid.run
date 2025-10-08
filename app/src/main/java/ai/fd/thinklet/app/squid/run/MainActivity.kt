@@ -92,9 +92,14 @@ class MainActivity : AppCompatActivity() {
 
         vibrator.vibrate(VibrationEffect.createOneShot(200, DEFAULT_AMPLITUDE))
 
-        if (viewModel.streamKey.value.isNullOrBlank()) {
-            viewModel.updateStreamKey(statusReportingManager.deviceId)
-        }
+        // Set the streamKey to the deviceId once, as it's now fixed.
+        val deviceId = statusReportingManager.deviceId
+        viewModel.setStreamKey(deviceId)
+        statusReportingManager.updateStreamKey(deviceId)
+
+        // Display the deviceId on the UI.
+        binding.deviceId.text = deviceId
+        binding.deviceIdSource.text = getString(R.string.device_id_source_text, statusReportingManager.deviceIdSource)
 
         // Observe and display server IP
         lifecycleScope.launch {
@@ -111,13 +116,11 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
-        // Observe and display stream key
-        lifecycleScope.launch {
-            viewModel.streamKey.collectLatest { streamKey ->
-                binding.streamKey.setText(streamKey)
-                statusReportingManager.updateStreamKey(streamKey)
-            }
-        }
+        // The streamKey is now fixed to deviceId and the UI is hidden,
+        // so we only need to display it once for debugging or informational purposes.
+        binding.streamKey.setText(statusReportingManager.deviceId)
+        binding.streamKey.isEnabled = false
+
 
         binding.dimension.text =
             getString(R.string.dimension_text, viewModel.width, viewModel.height)
@@ -129,10 +132,9 @@ class MainActivity : AppCompatActivity() {
         binding.micMode.text = viewModel.micMode.argumentValue
         binding.permissionGranted.text = permissionHelper.areAllPermissionsGranted().toString()
 
-        // Save button click listener - saves both server IP and stream key
+        // Save button click listener - now only saves server IP
         binding.buttonSaveConfig.setOnClickListener {
             val newServerIp = binding.serverIp.text.toString().trim()
-            val newStreamKey = binding.streamKey.text.toString().trim()
             
             // Basic IP address validation
             if (newServerIp.isEmpty()) {
@@ -147,14 +149,8 @@ class MainActivity : AppCompatActivity() {
                 return@setOnClickListener
             }
             
-            if (newStreamKey.isEmpty()) {
-                viewModel.showToast("Stream key cannot be empty")
-                return@setOnClickListener
-            }
-            
             // Save the configuration
             viewModel.updateServerIp(newServerIp)
-            viewModel.updateStreamKey(newStreamKey)
             viewModel.showToast("Configuration saved successfully")
             
             // Disable the save button after saving
@@ -164,14 +160,6 @@ class MainActivity : AppCompatActivity() {
 
         // Text change listeners to enable/disable save button
         binding.serverIp.addTextChangedListener(object : android.text.TextWatcher {
-            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
-            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}
-            override fun afterTextChanged(s: android.text.Editable?) {
-                checkIfConfigChanged()
-            }
-        })
-
-        binding.streamKey.addTextChangedListener(object : android.text.TextWatcher {
             override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
             override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}
             override fun afterTextChanged(s: android.text.Editable?) {
@@ -314,11 +302,9 @@ class MainActivity : AppCompatActivity() {
      */
     private fun checkIfConfigChanged() {
         val currentServerIp = binding.serverIp.text.toString().trim()
-        val currentStreamKey = binding.streamKey.text.toString().trim()
         val savedServerIp = viewModel.serverIp.value
-        val savedStreamKey = viewModel.streamKey.value
         
-        val isChanged = currentServerIp != savedServerIp || currentStreamKey != savedStreamKey
+        val isChanged = currentServerIp != savedServerIp
         binding.buttonSaveConfig.isEnabled = isChanged
     }
 
