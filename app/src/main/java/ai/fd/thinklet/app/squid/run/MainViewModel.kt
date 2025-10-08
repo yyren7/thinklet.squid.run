@@ -48,6 +48,8 @@ import java.util.Locale
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.CancellationException
 import androidx.lifecycle.LifecycleOwner
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 class MainViewModel(
     private val application: Application,
@@ -262,7 +264,7 @@ class MainViewModel(
             }
             val localStream = stream ?: GenericStream(
                 application,
-                ConnectionCheckerImpl(streamingEventMutableSharedFlow, _isStreaming, _connectionStatus),
+                ConnectionCheckerImpl(this, streamingEventMutableSharedFlow, _isStreaming, _connectionStatus),
                 cameraSource,
                 audioSource
             ).apply {
@@ -580,7 +582,7 @@ class MainViewModel(
                                 
                                 // 在录制停止后计算并保存 MD5
                                 // 关键：延迟执行，确保底层 MediaMuxer 完全将数据刷新到磁盘
-                                viewModelScope.launch {
+                                viewModelScope.launch(Dispatchers.IO) {
                                     try {
                                         // 等待 1 秒，确保文件完全写入磁盘
                                         // MediaMuxer 和文件系统可能需要时间来完成最后的写入操作
@@ -681,6 +683,7 @@ class MainViewModel(
     }
 
     private class ConnectionCheckerImpl(
+        private val viewModel: MainViewModel,
         private val streamingEventMutableSharedFlow: MutableSharedFlow<StreamingEvent>,
         private val isStreamingFlow: MutableStateFlow<Boolean>,
         private val connectionStatusFlow: MutableStateFlow<ConnectionStatus>
@@ -698,6 +701,7 @@ class MainViewModel(
             streamingEventMutableSharedFlow.tryEmit(StreamingEvent("onConnectionFailed: $reason"))
             isStreamingFlow.tryEmit(false)
             connectionStatusFlow.tryEmit(ConnectionStatus.FAILED)
+            viewModel.stopStreaming()
         }
 
         override fun onConnectionStarted(url: String) {
@@ -715,6 +719,7 @@ class MainViewModel(
             streamingEventMutableSharedFlow.tryEmit(StreamingEvent("onDisconnect"))
             isStreamingFlow.tryEmit(false)
             connectionStatusFlow.tryEmit(ConnectionStatus.DISCONNECTED)
+            viewModel.stopStreaming()
             // Note: The underlying stream state is cleaned up by the user actively calling stopStreaming() or before the next startStream.
         }
 
@@ -784,54 +789,62 @@ class MainViewModel(
 
     /**
      * Completely release camera and encoder resources.
+     * 这个方法可以在主线程调用，但耗时操作会在后台线程执行
      */
     private fun releaseCamera() {
-        stream?.let { localStream ->
-            // 分别处理每个清理步骤，确保录制停止不会被跳过
-            
-            // 1. 首先停止录制（最关键，必须确保文件正确关闭）
-            if (localStream.isRecording) {
-                try {
-                    Log.i("MainViewModel", "Stopping recording before releasing camera")
-                    localStream.stopRecord()
-                    // 给一点时间让录制完全停止并写入文件
-                    Thread.sleep(200)
-                } catch (e: Exception) {
-                    Log.e("MainViewModel", "Failed to stop recording, but will continue cleanup", e)
-                }
-            }
-            
-            // 2. 停止推流
-            if (localStream.isStreaming) {
-                try {
-                    localStream.stopStream()
-                } catch (e: Exception) {
-                    Log.e("MainViewModel", "Failed to stop streaming", e)
-                }
-            }
-            
-            // 3. 停止预览
-            if (localStream.isOnPreview) {
-                try {
-                    localStream.stopPreview()
-                } catch (e: Exception) {
-                    Log.e("MainViewModel", "Failed to stop preview", e)
-                }
-            }
-            
-            // 4. 最后释放资源
+        val localStream = stream ?: return
+        
+        // 在后台线程执行资源释放，避免阻塞主线程
+        viewModelScope.launch(Dispatchers.IO) {
             try {
-                localStream.release()
-                streamingEventMutableSharedFlow.tryEmit(
-                    StreamingEvent("Camera resources have been released")
-                )
-            } catch (e: Exception) {
-                Log.e("MainViewModel", "Failed to release camera resources", e)
+                // 1. 首先停止录制（最关键，必须确保文件正确关闭）
+                if (localStream.isRecording) {
+                    try {
+                        Log.i("MainViewModel", "Stopping recording before releasing camera")
+                        localStream.stopRecord()
+                        // 等待录制完全停止，给文件系统时间释放锁
+                        delay(200)
+                    } catch (e: Exception) {
+                        Log.e("MainViewModel", "Failed to stop recording, but will continue cleanup", e)
+                    }
+                }
+                
+                // 2. 停止推流
+                if (localStream.isStreaming) {
+                    try {
+                        localStream.stopStream()
+                    } catch (e: Exception) {
+                        Log.e("MainViewModel", "Failed to stop streaming", e)
+                    }
+                }
+                
+                // 3. 停止预览
+                if (localStream.isOnPreview) {
+                    try {
+                        localStream.stopPreview()
+                    } catch (e: Exception) {
+                        Log.e("MainViewModel", "Failed to stop preview", e)
+                    }
+                }
+                
+                // 4. 最后释放资源
+                try {
+                    localStream.release()
+                    streamingEventMutableSharedFlow.tryEmit(
+                        StreamingEvent("Camera resources have been released")
+                    )
+                } catch (e: Exception) {
+                    Log.e("MainViewModel", "Failed to release camera resources", e)
+                }
+            } finally {
+                // 确保状态更新在主线程执行
+                withContext(Dispatchers.Main) {
+                    stream = null
+                    _isPrepared.value = false
+                    _isPreviewActive.value = false
+                }
             }
         }
-        stream = null
-        _isPrepared.value = false
-        _isPreviewActive.value = false
     }
 
     /**
@@ -875,33 +888,71 @@ class MainViewModel(
     /**
      * 当 ViewModel 被销毁时调用（应用完全退出时）
      * 确保正在进行的录制被安全停止
+     * 
+     * 注意：这个方法在主线程同步执行，但我们需要给录制足够时间停止
+     * 使用 runBlocking 在 IO 线程执行，避免阻塞主线程的其他操作
      */
     override fun onCleared() {
         super.onCleared()
         Log.i("MainViewModel", "ViewModel is being cleared")
         
-        // 如果正在录制，必须先停止录制
-        if (_isRecording.value) {
-            Log.w("MainViewModel", "Recording is still active during onCleared, forcing stop")
-            stream?.let { localStream ->
-                try {
+        stream?.let { localStream ->
+            // 使用 runBlocking + Dispatchers.IO 在后台线程同步等待
+            // 这样不会阻塞主线程的消息队列，但确保录制正确停止
+            try {
+                kotlinx.coroutines.runBlocking(Dispatchers.IO) {
+                    // 如果正在录制，必须先停止录制
                     if (localStream.isRecording) {
-                        localStream.stopRecord()
-                        // 同步等待一小段时间，确保文件关闭
-                        Thread.sleep(500)
+                        Log.w("MainViewModel", "Recording is still active during onCleared, forcing stop")
+                        try {
+                            localStream.stopRecord()
+                            // 等待文件系统释放锁，确保文件完整写入
+                            delay(500)
+                        } catch (e: Exception) {
+                            Log.e("MainViewModel", "Failed to stop recording in onCleared", e)
+                        }
                     }
-                } catch (e: Exception) {
-                    Log.e("MainViewModel", "Failed to stop recording in onCleared", e)
+                    
+                    // 停止推流
+                    if (localStream.isStreaming) {
+                        try {
+                            localStream.stopStream()
+                        } catch (e: Exception) {
+                            Log.e("MainViewModel", "Failed to stop streaming in onCleared", e)
+                        }
+                    }
+                    
+                    // 停止预览
+                    if (localStream.isOnPreview) {
+                        try {
+                            localStream.stopPreview()
+                        } catch (e: Exception) {
+                            Log.e("MainViewModel", "Failed to stop preview in onCleared", e)
+                        }
+                    }
+                    
+                    // 释放资源
+                    try {
+                        localStream.release()
+                        Log.i("MainViewModel", "All camera resources released in onCleared")
+                    } catch (e: Exception) {
+                        Log.e("MainViewModel", "Failed to release camera resources in onCleared", e)
+                    }
                 }
+            } catch (e: Exception) {
+                Log.e("MainViewModel", "Exception during cleanup in onCleared", e)
             }
         }
         
-        // 清理所有资源
-        releaseCamera()
+        stream = null
+        _isPrepared.value = false
+        _isPreviewActive.value = false
     }
 
     fun showToast(message: String) {
-        Toast.makeText(application, message, Toast.LENGTH_LONG).show()
+        viewModelScope.launch(Dispatchers.Main) {
+            Toast.makeText(application, message, Toast.LENGTH_LONG).show()
+        }
     }
 
     companion object {
