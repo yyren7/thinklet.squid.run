@@ -109,10 +109,26 @@ class MainActivity : AppCompatActivity() {
         }
 
         // Observe and display stream URL (dynamically generated from server IP)
+        // When streamUrl changes (due to IP change), update StatusReportingManager
         lifecycleScope.launch {
             viewModel.streamUrl.collectLatest { streamUrl ->
                 binding.streamUrl.text = streamUrl
                 statusReportingManager.updateStreamUrl(streamUrl)
+            }
+        }
+        
+        // Monitor serverIp changes to handle reconnection of streaming and other services
+        lifecycleScope.launch {
+            var firstEmission = true
+            viewModel.serverIp.collectLatest { newIp ->
+                // Skip the first emission (initial value)
+                if (firstEmission) {
+                    firstEmission = false
+                    return@collectLatest
+                }
+                
+                // IP changed, handle reconnection
+                handleServerIpChanged(newIp)
             }
         }
 
@@ -375,13 +391,11 @@ class MainActivity : AppCompatActivity() {
 
         // 2. TTS 语音播报
         viewModel.ttsManager.speakPowerDown()
-        try {
-            Thread.sleep(1000)
-        } catch (e: InterruptedException) {
-            Log.e("PowerKey", "TTS wait interrupted", e)
-        }
 
-        // 3. 执行关机
+        // 3. 发送离线状态并准备关机
+        statusReportingManager.sendOfflineStatusAndStop()
+
+        // 4. 执行关机
         PowerController().shutdown(this, wait = 1000 /* max wait 1s */)
     }
 
@@ -598,5 +612,45 @@ class MainActivity : AppCompatActivity() {
             if (i % 2 == 0) 0 else DEFAULT_AMPLITUDE
         }
         return VibrationEffect.createWaveform(timing, amplitudes, -1)
+    }
+
+    /**
+     * Handle server IP change - reconnect all services using the new IP
+     */
+    private fun handleServerIpChanged(newIp: String?) {
+        if (newIp == null) return
+        
+        Log.i("MainActivity", "🔄 Server IP changed to: $newIp, reconnecting services...")
+        
+        // 1. If streaming is active, stop it and restart with new IP
+        val wasStreaming = viewModel.isStreaming.value
+        if (wasStreaming) {
+            Log.i("MainActivity", "📡 Stopping streaming to reconnect with new IP...")
+            viewModel.stopStreaming()
+        }
+        
+        // 2. StatusReportingManager will automatically reconnect via streamUrl observer
+        // (already handled in the streamUrl.collectLatest block)
+        
+        // 3. Restart streaming if it was active
+        if (wasStreaming) {
+            // Wait a bit for the connection to settle
+            lifecycleScope.launch {
+                kotlinx.coroutines.delay(1000)
+                Log.i("MainActivity", "📡 Restarting streaming with new IP...")
+                viewModel.maybeStartStreaming { isStreamingStarted ->
+                    if (isStreamingStarted) {
+                        viewModel.showToast("Streaming reconnected with new IP")
+                        vibrator.vibrate(createStaccatoVibrationEffect(1))
+                    } else {
+                        viewModel.showToast("Failed to reconnect streaming")
+                        vibrator.vibrate(createStaccatoVibrationEffect(3))
+                    }
+                }
+            }
+        }
+        
+        viewModel.showToast("Server IP updated to: $newIp")
+        Log.i("MainActivity", "✅ IP change handling completed")
     }
 }

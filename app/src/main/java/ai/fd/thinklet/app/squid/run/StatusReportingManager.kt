@@ -422,6 +422,24 @@ class StatusReportingManager(
         }
     }
 
+    fun sendOfflineStatusAndStop() {
+        if (webSocket == null) {
+            Log.w(TAG, "WebSocket is not connected, skipping offline status send.")
+        } else {
+            val status = getDeviceStatus().copy(isOnline = false)
+            val update = StatusUpdate(id = deviceId, status = status)
+            val statusJson = gson.toJson(update)
+            Log.d(TAG, "📤 Sending offline status: $statusJson")
+            webSocket?.send(statusJson)
+            // 等待一小段时间以确保消息发出
+            try {
+                Thread.sleep(100)
+            } catch (e: InterruptedException) {
+                Log.e(TAG, "Wait for offline message sending interrupted", e)
+            }
+        }
+        stop()
+    }
 
     private fun sendDeviceStatus() {
         if (webSocket == null) {
