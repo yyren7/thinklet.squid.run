@@ -12,6 +12,8 @@ import okhttp3.Request
 import okhttp3.Response
 import okhttp3.WebSocket
 import okhttp3.WebSocketListener
+import java.net.ConnectException
+import java.net.SocketTimeoutException
 import java.util.Timer
 import java.util.TimerTask
 import java.util.UUID
@@ -82,8 +84,8 @@ class StatusReportingManager(
     
     companion object {
         private const val TAG = "StatusReportingManager"
-        private const val NORMAL_REPORT_INTERVAL = 60000L  // 60 seconds
-        private const val ACTIVE_REPORT_INTERVAL = 60000L   // 60 seconds
+        private const val NORMAL_REPORT_INTERVAL = 5000L  // 5 seconds
+        private const val ACTIVE_REPORT_INTERVAL = 5000L   // 5 seconds
     }
 
     private val powerConnectionReceiver = object : BroadcastReceiver() {
@@ -142,7 +144,7 @@ class StatusReportingManager(
         if (this.streamUrl != newStreamUrl) {
             this.streamUrl = newStreamUrl
             Log.d(TAG, "Stream URL updated to: $newStreamUrl")
-            // 重新连接以使用新的 URL
+            // Reconnect to use the new URL
             reconnect()
         }
     }
@@ -220,10 +222,10 @@ class StatusReportingManager(
     
     /**
      * Stop the file transfer server
-     * 同步等待服务器完全停止
+     * Waits synchronously for the server to stop completely.
      */
     private fun stopFileTransferServer() {
-        // 只有在服务器已经被初始化时才停止它
+        // Only stop the server if it has been initialized.
         if (!fileServerInitialized) {
             Log.d(TAG, "File transfer server was never started, skipping stop")
             return
@@ -234,7 +236,7 @@ class StatusReportingManager(
             fileTransferServer.stopServer()
             fileServerEnabled = false
             
-            // 等待一段时间确保端口完全释放
+            // Wait for a short period to ensure the port is fully released.
             Thread.sleep(500)
             Log.i(TAG, "✅ File transfer server stopped and port 8889 released")
         } catch (e: Exception) {
@@ -243,7 +245,7 @@ class StatusReportingManager(
     }
 
     /**
-     * 停止 StatusReportingManager 并同步等待所有资源释放完成
+     * Stops StatusReportingManager and waits synchronously for all resources to be released.
      */
     fun stop() {
         if (!isStarted) {
@@ -254,7 +256,7 @@ class StatusReportingManager(
         Log.d(TAG, "🛑 Stopping StatusReportingManager...")
         isStarted = false
         
-        // 1. 取消定时器
+        // 1. Cancel the timer
         try {
             timer?.cancel()
             timer?.purge()
@@ -264,12 +266,12 @@ class StatusReportingManager(
             Log.e(TAG, "❌ Failed to cancel timer", e)
         }
         
-        // 2. 关闭 WebSocket 连接
+        // 2. Close the WebSocket connection
         try {
             val ws = webSocket
             if (ws != null) {
                 ws.close(1000, "Client initiated disconnect.")
-                // 等待 WebSocket 关闭完成
+                // Wait for the WebSocket to close completely.
                 Thread.sleep(300)
                 webSocket = null
                 Log.d(TAG, "✅ WebSocket closed")
@@ -278,10 +280,10 @@ class StatusReportingManager(
             Log.e(TAG, "❌ Failed to close WebSocket", e)
         }
         
-        // 3. 停止文件传输服务器（关键！必须等待端口释放）
+        // 3. Stop the file transfer server (critical! must wait for the port to be released)
         stopFileTransferServer()
         
-        // 4. 注销广播接收器
+        // 4. Unregister the broadcast receiver
         try {
             context.unregisterReceiver(powerConnectionReceiver)
             Log.d(TAG, "✅ BroadcastReceiver unregistered")
@@ -344,7 +346,11 @@ class StatusReportingManager(
             }
 
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
-                Log.e(TAG, "❌ WebSocket connection failed", t)
+                if (t is ConnectException || t is SocketTimeoutException) {
+                    Log.e(TAG, "❌ WebSocket: Could not connect to server: ${t.message}")
+                } else {
+                    Log.e(TAG, "❌ WebSocket connection failed", t)
+                }
                 isConnecting = false
                 this@StatusReportingManager.webSocket = null
                 timer?.cancel()
@@ -431,7 +437,7 @@ class StatusReportingManager(
             val statusJson = gson.toJson(update)
             Log.d(TAG, "📤 Sending offline status: $statusJson")
             webSocket?.send(statusJson)
-            // 等待一小段时间以确保消息发出
+            // Wait for a short while to ensure the message is sent.
             try {
                 Thread.sleep(100)
             } catch (e: InterruptedException) {

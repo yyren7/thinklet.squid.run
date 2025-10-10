@@ -357,10 +357,26 @@ class MainViewModel(
         }
         
         // 如果没有在录制或推流，正常清理所有资源
-        stopStreaming()
-        stopPreview()
-        stream = null
-        _isPrepared.value = false
+        Log.i("MainViewModel", "Activity pausing, cleaning up resources")
+        val streamSnapshot = stream
+        if (streamSnapshot != null) {
+            // 停止所有活动
+            if (streamSnapshot.isStreaming) {
+                streamSnapshot.stopStream()
+                _isStreaming.value = false
+                _connectionStatus.value = ConnectionStatus.IDLE
+            }
+            if (streamSnapshot.isOnPreview) {
+                streamSnapshot.stopPreview()
+                _isPreviewActive.value = false
+            }
+            // 释放资源（只调用一次）
+            releaseCamera()
+        } else {
+            // stream已经为null，只需要确保状态正确
+            _isPrepared.value = false
+            _isPreviewActive.value = false
+        }
     }
 
     fun activityOnResume() {
@@ -794,6 +810,13 @@ class MainViewModel(
     private fun releaseCamera() {
         val localStream = stream ?: return
         
+        // 立即将 stream 设为 null，防止重复释放（必须在启动协程前完成）
+        stream = null
+        _isPrepared.value = false
+        _isPreviewActive.value = false
+        
+        Log.i("MainViewModel", "Starting camera release process")
+        
         // 在后台线程执行资源释放，避免阻塞主线程
         viewModelScope.launch(Dispatchers.IO) {
             try {
@@ -833,16 +856,12 @@ class MainViewModel(
                     streamingEventMutableSharedFlow.tryEmit(
                         StreamingEvent("Camera resources have been released")
                     )
+                    Log.i("MainViewModel", "Camera released successfully")
                 } catch (e: Exception) {
                     Log.e("MainViewModel", "Failed to release camera resources", e)
                 }
-            } finally {
-                // 确保状态更新在主线程执行
-                withContext(Dispatchers.Main) {
-                    stream = null
-                    _isPrepared.value = false
-                    _isPreviewActive.value = false
-                }
+            } catch (e: Exception) {
+                Log.e("MainViewModel", "Unexpected error during camera release", e)
             }
         }
     }
