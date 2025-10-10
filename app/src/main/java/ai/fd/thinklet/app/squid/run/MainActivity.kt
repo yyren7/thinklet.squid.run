@@ -281,6 +281,7 @@ class MainActivity : AppCompatActivity() {
         }
 
         LocalBroadcastManager.getInstance(this).registerReceiver(streamingControlReceiver, IntentFilter("streaming-control"))
+        LocalBroadcastManager.getInstance(this).registerReceiver(recordingControlReceiver, IntentFilter("recording-control"))
         
         // TTS 播报 app 已准备好 - 放在最后确保 TTS 已初始化完成
         viewModel.ttsManager.speakApplicationPrepared()
@@ -292,6 +293,7 @@ class MainActivity : AppCompatActivity() {
         // 先注销广播接收器，避免在清理过程中收到新的命令
         try {
             LocalBroadcastManager.getInstance(this).unregisterReceiver(streamingControlReceiver)
+            LocalBroadcastManager.getInstance(this).unregisterReceiver(recordingControlReceiver)
             Log.d("MainActivity", "✅ StreamingControlReceiver unregistered")
         } catch (e: Exception) {
             Log.e("MainActivity", "❌ Failed to unregister receiver", e)
@@ -425,6 +427,30 @@ class MainActivity : AppCompatActivity() {
                 "stop" -> {
                     if (viewModel.isStreaming.value) {
                         viewModel.stopStreaming()
+                    }
+                }
+            }
+        }
+    }
+
+    private val recordingControlReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            when (intent?.getStringExtra("action")) {
+                "start" -> {
+                    if (!viewModel.isRecording.value) {
+                        viewModel.startRecording { isRecordingStarted ->
+                            if (isRecordingStarted) {
+                                vibrator.vibrate(createStaccatoVibrationEffect(1))
+                            } else {
+                                vibrator.vibrate(createStaccatoVibrationEffect(3))
+                            }
+                        }
+                    }
+                }
+                "stop" -> {
+                    if (viewModel.isRecording.value) {
+                        viewModel.stopRecording()
+                        vibrator.vibrate(createStaccatoVibrationEffect(2))
                     }
                 }
             }

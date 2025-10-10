@@ -463,17 +463,28 @@ class StatusReportingManager(
     }
 
     private fun handleCommand(command: Command) {
-        val intent = Intent("streaming-control")
+        val streamIntent = Intent("streaming-control")
+        val recordIntent = Intent("recording-control")
         when (command.command) {
             "startStream" -> {
                 Log.d(TAG, "Start stream command received")
-                intent.putExtra("action", "start")
-                LocalBroadcastManager.getInstance(context).sendBroadcast(intent)
+                streamIntent.putExtra("action", "start")
+                LocalBroadcastManager.getInstance(context).sendBroadcast(streamIntent)
             }
             "stopStream" -> {
                 Log.d(TAG, "Stop stream command received")
-                intent.putExtra("action", "stop")
-                LocalBroadcastManager.getInstance(context).sendBroadcast(intent)
+                streamIntent.putExtra("action", "stop")
+                LocalBroadcastManager.getInstance(context).sendBroadcast(streamIntent)
+            }
+            "startRecording" -> {
+                Log.d(TAG, "Start recording command received")
+                recordIntent.putExtra("action", "start")
+                LocalBroadcastManager.getInstance(context).sendBroadcast(recordIntent)
+            }
+            "stopRecording" -> {
+                Log.d(TAG, "Stop recording command received")
+                recordIntent.putExtra("action", "stop")
+                LocalBroadcastManager.getInstance(context).sendBroadcast(recordIntent)
             }
             else -> {
                 Log.w(TAG, "Unknown command: ${command.command}")
