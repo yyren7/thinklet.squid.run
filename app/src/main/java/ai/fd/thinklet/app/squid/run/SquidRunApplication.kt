@@ -5,10 +5,17 @@ import android.content.Context
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.ViewModelStore
 import androidx.lifecycle.ViewModelStoreOwner
+import kotlinx.coroutines.GlobalScope
+import kotlinx.coroutines.launch
 
 class SquidRunApplication : Application(), ViewModelStoreOwner {
     override val viewModelStore: ViewModelStore by lazy {
         ViewModelStore()
+    }
+
+    // Lazy initialization of NetworkManager
+    val networkManager: NetworkManager by lazy {
+        NetworkManager(applicationContext)
     }
 
     // Lazy initialization of StatusReportingManager to ensure it's created only once.
@@ -18,9 +25,12 @@ class SquidRunApplication : Application(), ViewModelStoreOwner {
         // We will get the streamUrl from the ViewModel, which will also be managed at the application level.
         StatusReportingManager(
             context = applicationContext,
-            streamUrl = null // Initialize with null, will be updated later
+            streamUrl = null, // Initialize with null, will be updated later
+            networkManager = networkManager // Inject the NetworkManager instance
         ).also {
-            it.start()
+            GlobalScope.launch {
+                it.start()
+            }
         }
     }
 
@@ -41,6 +51,7 @@ class SquidRunApplication : Application(), ViewModelStoreOwner {
         // This is where we would stop the StatusReportingManager
         // when the application is terminating.
         statusReportingManager.stop()
+        networkManager.unregisterCallback() // Unregister network callback
         ttsManager.shutdown()
         super.onTerminate()
     }

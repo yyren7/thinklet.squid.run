@@ -26,6 +26,10 @@ import androidx.core.content.ContextCompat
 import android.Manifest
 import android.annotation.SuppressLint
 import android.content.pm.PackageManager
+import kotlinx.coroutines.GlobalScope
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.flow.flow
 
 data class DeviceStatus(
     val batteryLevel: Int,
@@ -50,7 +54,8 @@ data class Command(val command: String)
 
 class StatusReportingManager(
     private val context: Context,
-    private var streamUrl: String?
+    private var streamUrl: String?,
+    private val networkManager: NetworkManager
 ) {
 
     var isStreamingReady: Boolean = false
@@ -62,7 +67,9 @@ class StatusReportingManager(
         .pingInterval(10, TimeUnit.SECONDS)
         .build()
     private var webSocket: WebSocket? = null
-    private var timer: Timer? = null
+    private var reportTimer: Timer? = null
+    private var reconnectTimer: Timer? = null
+    private var reconnectAttempts = 0
     private val gson = Gson()
     val deviceId: String
     val deviceIdSource: String
@@ -86,6 +93,9 @@ class StatusReportingManager(
         private const val TAG = "StatusReportingManager"
         private const val NORMAL_REPORT_INTERVAL = 5000L  // 5 seconds
         private const val ACTIVE_REPORT_INTERVAL = 5000L   // 5 seconds
+        private const val INITIAL_RECONNECT_DELAY = 2000L  // 2 seconds
+        private const val MAX_RECONNECT_DELAY = 60000L     // 60 seconds
+        private const val RECONNECT_JITTER = 500           // 0.5 seconds
     }
 
     private val powerConnectionReceiver = object : BroadcastReceiver() {
@@ -99,6 +109,20 @@ class StatusReportingManager(
         val (id, source) = initializeDeviceId()
         this.deviceId = id
         this.deviceIdSource = source
+        // Start listening to network state changes
+        GlobalScope.launch {
+            networkManager.isConnected.collect { isConnected ->
+                if (isConnected) {
+                    Log.i(TAG, "Network connection is back. Attempting to connect immediately.")
+                    // When network comes back, try to connect immediately
+                    reconnect(true)
+                } else {
+                    Log.w(TAG, "Network connection lost. Stopping any reconnect attempts.")
+                    // When network is lost, cancel any pending reconnect tasks
+                    cancelReconnectTimer()
+                }
+            }
+        }
     }
 
     @SuppressLint("HardwareIds")
@@ -145,14 +169,20 @@ class StatusReportingManager(
             this.streamUrl = newStreamUrl
             Log.d(TAG, "Stream URL updated to: $newStreamUrl")
             // Reconnect to use the new URL
-            reconnect()
+            reconnect(true)
         }
     }
 
-    private fun reconnect() {
+    private fun reconnect(immediate: Boolean = false) {
         // Stop the existing connection and timer, then start a new connection.
         stop()
-        start()
+        if (immediate) {
+            start()
+        } else {
+            // If not immediate, it implies a failure, so we'll use maybeReconnect logic in connect's onFailure.
+            // This path is less used now due to network state listener.
+            start()
+        }
     }
 
     fun updateStreamingReadyStatus(isReady: Boolean) {
@@ -256,12 +286,13 @@ class StatusReportingManager(
         Log.d(TAG, "🛑 Stopping StatusReportingManager...")
         isStarted = false
         
-        // 1. Cancel the timer
+        // 1. Cancel the timers
         try {
-            timer?.cancel()
-            timer?.purge()
-            timer = null
-            Log.d(TAG, "✅ Timer cancelled")
+            reportTimer?.cancel()
+            reportTimer?.purge()
+            reportTimer = null
+            cancelReconnectTimer()
+            Log.d(TAG, "✅ Timers cancelled")
         } catch (e: Exception) {
             Log.e(TAG, "❌ Failed to cancel timer", e)
         }
@@ -300,6 +331,12 @@ class StatusReportingManager(
         }
         isConnecting = true
 
+        if (!networkManager.isConnected.value) {
+            Log.w(TAG, "No network connection. Aborting connect attempt.")
+            isConnecting = false
+            return
+        }
+
         if (streamUrl == null) {
             Log.e(TAG, "❌ Stream URL is null, cannot start WebSocket.")
             isConnecting = false
@@ -328,6 +365,8 @@ class StatusReportingManager(
                 Log.d(TAG, "✅ WebSocket connection opened")
                 isConnecting = false
                 this@StatusReportingManager.webSocket = webSocket
+                // Reset reconnect attempts on successful connection
+                reconnectAttempts = 0
                 startReportTimer()
             }
 
@@ -353,13 +392,13 @@ class StatusReportingManager(
                 }
                 isConnecting = false
                 this@StatusReportingManager.webSocket = null
-                timer?.cancel()
+                reportTimer?.cancel()
                 maybeReconnect()
             }
 
             override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
                 Log.d(TAG, "🔌 WebSocket connection closing: $reason")
-                timer?.cancel()
+                reportTimer?.cancel()
             }
 
             override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
@@ -371,14 +410,28 @@ class StatusReportingManager(
         })
     }
     private fun maybeReconnect() {
-        if (isStarted) {
-            Log.d(TAG, "will try to reconnect in 5 seconds")
-            Timer().schedule(object : TimerTask() {
+        if (isStarted && networkManager.isConnected.value) {
+            reconnectAttempts++
+            val delay = (INITIAL_RECONNECT_DELAY * (1 shl (reconnectAttempts - 1))).coerceAtMost(MAX_RECONNECT_DELAY)
+            val jitter = (Math.random() * RECONNECT_JITTER).toLong()
+            val totalDelay = delay + jitter
+            
+            Log.d(TAG, "Will try to reconnect in ${totalDelay / 1000} seconds (attempt #${reconnectAttempts})")
+
+            cancelReconnectTimer()
+            reconnectTimer = Timer("ReconnectTimer")
+            reconnectTimer?.schedule(object : TimerTask() {
                 override fun run() {
                     connect()
                 }
-            }, 5000)
+            }, totalDelay)
         }
+    }
+
+    private fun cancelReconnectTimer() {
+        reconnectTimer?.cancel()
+        reconnectTimer?.purge()
+        reconnectTimer = null
     }
 
     /**
@@ -402,8 +455,8 @@ class StatusReportingManager(
      * Start or restart the status reporting timer
      */
     private fun startReportTimer() {
-        timer?.cancel()
-        timer = timer(period = currentReportInterval) {
+        reportTimer?.cancel()
+        reportTimer = timer(period = currentReportInterval) {
             sendDeviceStatus()
         }
         Log.d(TAG, "⏱️ Status reporting timer started with interval: ${currentReportInterval}ms")
@@ -473,7 +526,7 @@ class StatusReportingManager(
         val isCharging: Boolean = status == BatteryManager.BATTERY_STATUS_CHARGING ||
                 status == BatteryManager.BATTERY_STATUS_FULL
 
-        val wifiSignalStrength = getWifiSignalStrength()
+        val wifiSignalStrength = networkManager.getWifiSignalStrength()
         val isOnline = webSocket != null
 
         return DeviceStatus(
