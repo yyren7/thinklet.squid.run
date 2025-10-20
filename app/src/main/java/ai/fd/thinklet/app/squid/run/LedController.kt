@@ -31,6 +31,13 @@ class LedController(context: Context) {
             handler.removeCallbacks(blinkRunnable)
             isLedOn = false
             ledClient.updateCameraLed(false)
+            
+            // 延迟再次确保LED已关闭（防止硬件驱动延迟导致的问题）
+            handler.postDelayed({
+                if (!isBlinking) {  // 确认没有被重新启动
+                    ledClient.updateCameraLed(false)
+                }
+            }, 100)
         }
     }
 }

@@ -28,7 +28,9 @@ import androidx.core.view.updateLayoutParams
 import androidx.lifecycle.flowWithLifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.localbroadcastmanager.content.LocalBroadcastManager
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import ai.fd.thinklet.sdk.maintenance.power.PowerController
 import ai.fd.thinklet.sdk.maintenance.launcher.Extension
@@ -59,9 +61,12 @@ class MainActivity : AppCompatActivity() {
 
     private val handler = Handler(Looper.getMainLooper())
     private lateinit var longPressRunnable: Runnable
+    private var lastCameraClickTime = 0L
+    private val CAMERA_CLICK_DEBOUNCE_MS = 1000
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         enableEdgeToEdge()
         setContentView(binding.root)
@@ -283,8 +288,14 @@ class MainActivity : AppCompatActivity() {
         LocalBroadcastManager.getInstance(this).registerReceiver(streamingControlReceiver, IntentFilter("streaming-control"))
         LocalBroadcastManager.getInstance(this).registerReceiver(recordingControlReceiver, IntentFilter("recording-control"))
         
-        // TTS 播报 app 已准备好 - 放在最后确保 TTS 已初始化完成
-        viewModel.ttsManager.speakApplicationPrepared()
+        // TTS 播报 app 已准备好
+        // 等待 TTS 初始化完成后再播报
+        lifecycleScope.launch {
+            Log.d("MainActivity", "⏳ Waiting for TTS to be ready before announcing...")
+            viewModel.ttsManager.ttsReady.first { it }
+            Log.i("MainActivity", "✅ TTS is ready, announcing application prepared")
+            viewModel.ttsManager.speakApplicationPrepared()
+        }
     }
 
     override fun onDestroy() {
@@ -342,7 +353,6 @@ class MainActivity : AppCompatActivity() {
             KeyEvent.KEYCODE_CAMERA -> {
                 // The original physical button trigger logic is retained,
                 // but now it calls the unified `toggleRecording` method.
-                toggleRecording()
                 return true
             }
 
@@ -368,6 +378,14 @@ class MainActivity : AppCompatActivity() {
             KeyEvent.KEYCODE_POWER -> handlePowerKeyUp()
             KeyEvent.KEYCODE_VOLUME_UP -> handleVolumeUpKeyPress()
             KeyEvent.KEYCODE_VOLUME_DOWN -> handleVolumeDownKeyUp()
+            KeyEvent.KEYCODE_CAMERA -> {
+                val now = System.currentTimeMillis()
+                if (now - lastCameraClickTime > CAMERA_CLICK_DEBOUNCE_MS) {
+                    lastCameraClickTime = now
+                    toggleRecording()
+                }
+                true
+            }
             else -> super.onKeyUp(keyCode, event)
         }
     }
@@ -437,20 +455,26 @@ class MainActivity : AppCompatActivity() {
         override fun onReceive(context: Context?, intent: Intent?) {
             when (intent?.getStringExtra("action")) {
                 "start" -> {
-                    if (!viewModel.isRecording.value) {
-                        viewModel.startRecording { isRecordingStarted ->
-                            if (isRecordingStarted) {
-                                vibrator.vibrate(createStaccatoVibrationEffect(1))
-                            } else {
-                                vibrator.vibrate(createStaccatoVibrationEffect(3))
-                            }
+                    // 移除MainActivity层的检查，统一由ViewModel层处理
+                    // ViewModel的并发保护会处理重复请求的情况
+                    viewModel.startRecording { isRecordingStarted ->
+                        if (isRecordingStarted) {
+                            vibrator.vibrate(createStaccatoVibrationEffect(1))
+                        } else {
+                            vibrator.vibrate(createStaccatoVibrationEffect(3))
                         }
                     }
                 }
                 "stop" -> {
-                    if (viewModel.isRecording.value) {
-                        viewModel.stopRecording()
-                        vibrator.vibrate(createStaccatoVibrationEffect(2))
+                    // 移除MainActivity层的检查，统一由ViewModel层处理
+                    // ViewModel会检查状态并记录适当的日志
+                    viewModel.stopRecording { isStopInitiated ->
+                        if (isStopInitiated) {
+                            vibrator.vibrate(createStaccatoVibrationEffect(2))
+                        } else {
+                            // 停止失败或未在录像中，使用不同的振动反馈
+                            vibrator.vibrate(createStaccatoVibrationEffect(3))
+                        }
                     }
                 }
             }
@@ -641,40 +665,18 @@ class MainActivity : AppCompatActivity() {
     }
 
     /**
-     * Handle server IP change - reconnect all services using the new IP
+     * Handle server IP change - stop streaming if active, WebSocket will reconnect automatically
      */
     private fun handleServerIpChanged(newIp: String?) {
         if (newIp == null) return
         
-        Log.i("MainActivity", "🔄 Server IP changed to: $newIp, reconnecting services...")
+        Log.i("MainActivity", "🔄 Server IP changed to: $newIp")
         
-        // 1. If streaming is active, stop it and restart with new IP
-        val wasStreaming = viewModel.isStreaming.value
-        if (wasStreaming) {
-            Log.i("MainActivity", "📡 Stopping streaming to reconnect with new IP...")
-            viewModel.stopStreaming()
-        }
-        
-        // 2. StatusReportingManager will automatically reconnect via streamUrl observer
+        // StatusReportingManager's WebSocket will automatically reconnect via streamUrl observer
         // (already handled in the streamUrl.collectLatest block)
         
-        // 3. Restart streaming if it was active
-        if (wasStreaming) {
-            // Wait a bit for the connection to settle
-            lifecycleScope.launch {
-                kotlinx.coroutines.delay(1000)
-                Log.i("MainActivity", "📡 Restarting streaming with new IP...")
-                viewModel.maybeStartStreaming { isStreamingStarted ->
-                    if (isStreamingStarted) {
-                        viewModel.showToast("Streaming reconnected with new IP")
-                        vibrator.vibrate(createStaccatoVibrationEffect(1))
-                    } else {
-                        viewModel.showToast("Failed to reconnect streaming")
-                        vibrator.vibrate(createStaccatoVibrationEffect(3))
-                    }
-                }
-            }
-        }
+        // If streaming is active, it will be stopped by updateServerIp() in ViewModel
+        // User should manually restart streaming if they want to stream to the new address
         
         viewModel.showToast("Server IP updated to: $newIp")
         Log.i("MainActivity", "✅ IP change handling completed")

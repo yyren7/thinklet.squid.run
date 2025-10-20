@@ -107,8 +107,18 @@ class MainViewModel(
     }
 
     fun updateServerIp(newIp: String) {
+        if (_serverIp.value == newIp) return
+
         _serverIp.value = newIp
         sharedPreferences.edit().putString("serverIp", newIp).apply()
+
+        // If streaming is active or attempting to connect, stop it.
+        // User should manually restart streaming to the new address if needed.
+        if (_isStreaming.value || _connectionStatus.value == ConnectionStatus.CONNECTING || 
+            _connectionStatus.value == ConnectionStatus.FAILED || _connectionStatus.value == ConnectionStatus.DISCONNECTED) {
+            Log.i("MainViewModel", "Server IP changed, stopping current stream.")
+            stopStreaming()
+        }
     }
 
     fun setStreamKey(newStreamKey: String) {
@@ -192,6 +202,22 @@ class MainViewModel(
     private var stream: GenericStream? = null
 
     private var startPreviewJob: Job? = null
+    
+    // Flag to prevent concurrent camera preparation
+    @Volatile
+    private var isPreparing: Boolean = false
+    
+    // Flag to prevent concurrent recording operations
+    @Volatile
+    private var isRecordingOperationInProgress: Boolean = false
+    
+    // Bitrate monitoring
+    @Volatile
+    private var consecutiveZeroBitrateCount = 0
+    @Volatile
+    private var lastBitrateWarningTime = 0L
+    private val ZERO_BITRATE_WARNING_THRESHOLD = 5  // Warn after 5 consecutive zeros
+    private val WARNING_COOLDOWN_MS = 10000L  // Only warn once every 10 seconds
 
 
     init {
@@ -232,11 +258,19 @@ class MainViewModel(
         if (_isPrepared.value) {
             return
         }
+        
+        // Prevent concurrent preparation
+        if (isPreparing) {
+            Log.d("MainViewModel", "Camera preparation already in progress, skipping")
+            return
+        }
+        
         if (streamUrl.value.isBlank() || streamKey.value.isNullOrBlank() || !isAllPermissionGranted()) {
             _isPrepared.value = false
             return
         }
 
+        isPreparing = true
         try {
             // Add a delay to give the camera service time to initialize on some devices.
             delay(1000)
@@ -323,6 +357,9 @@ class MainViewModel(
                 StreamingEvent("Camera initialization failed: ${e.message}")
             )
             _isPrepared.value = false
+        } finally {
+            // Always reset the preparing flag when done
+            isPreparing = false
         }
     }
 
@@ -424,8 +461,47 @@ class MainViewModel(
             _connectionStatus.value = ConnectionStatus.IDLE
         }
         
-        streamSnapshot.startStream("$currentStreamUrl/$currentStreamKey")
-        return true
+        // Try to start streaming with error handling for network issues
+        return try {
+            streamSnapshot.startStream("$currentStreamUrl/$currentStreamKey")
+            true
+        } catch (e: CancellationException) {
+            // Network selector closed or cancelled - this can happen on first connection after WiFi connects
+            // This usually means the underlying RTMP client's network resources are in a bad state
+            Log.e("MainViewModel", "Failed to start stream due to cancellation (selector closed): ${e.message}")
+            streamingEventMutableSharedFlow.tryEmit(
+                StreamingEvent("Stream start failed: Network resources corrupted. Resetting stream...")
+            )
+            
+            // The stream object's network resources are corrupted, we need to release and recreate it
+            // IMPORTANT: Mark as not prepared FIRST to prevent concurrent access during cleanup
+            _isPrepared.value = false
+            stream = null
+            
+            // Release the corrupted stream in background
+            // Note: We already set stream=null above, so no new operations can use this corrupted stream
+            viewModelScope.launch(Dispatchers.IO) {
+                try {
+                    streamSnapshot.release()
+                    streamingEventMutableSharedFlow.tryEmit(
+                        StreamingEvent("Stream reset complete. Please try streaming again.")
+                    )
+                } catch (releaseException: Exception) {
+                    Log.e("MainViewModel", "Failed to release corrupted stream", releaseException)
+                }
+            }
+            
+            _connectionStatus.value = ConnectionStatus.FAILED
+            false
+        } catch (e: Exception) {
+            // Other exceptions during stream start
+            Log.e("MainViewModel", "Failed to start stream: ${e.message}", e)
+            streamingEventMutableSharedFlow.tryEmit(
+                StreamingEvent("Failed to start stream: ${e.message}")
+            )
+            _connectionStatus.value = ConnectionStatus.FAILED
+            false
+        }
     }
     
     /**
@@ -527,32 +603,69 @@ class MainViewModel(
      * Start recording video to a local file.
      * Recording and streaming share the same camera stream but output to different destinations.
      * If the camera is not ready, it will be initialized automatically.
+     * 
+     * Thread-safe: Uses operation lock to prevent concurrent recording operations.
      */
     fun startRecording(onResult: ((Boolean) -> Unit)? = null) {
+        Log.i("MainViewModel", "📹 Recording start requested. Current state: isRecording=${_isRecording.value}, operationInProgress=$isRecordingOperationInProgress")
+        
+        // Check if another recording operation is already in progress
+        if (isRecordingOperationInProgress) {
+            Log.w("MainViewModel", "⚠️ Recording operation already in progress, ignoring request")
+            streamingEventMutableSharedFlow.tryEmit(
+                StreamingEvent("Recording operation already in progress")
+            )
+            onResult?.invoke(false)
+            return
+        }
+        
+        // Check if already recording
+        if (_isRecording.value) {
+            Log.w("MainViewModel", "⚠️ Recording is already active, ignoring request")
+            streamingEventMutableSharedFlow.tryEmit(
+                StreamingEvent("Recording is already in progress")
+            )
+            onResult?.invoke(true)
+            return
+        }
+        
+        // Set operation lock
+        isRecordingOperationInProgress = true
+        Log.d("MainViewModel", "🔒 Recording operation lock acquired")
+        
         // Ensure the camera is ready
         ensureCameraReady {
             val result = startRecordingInternal()
+            // Release operation lock after internal call completes
+            isRecordingOperationInProgress = false
+            Log.d("MainViewModel", "🔓 Recording operation lock released, result=$result")
             onResult?.invoke(result)
         }
     }
 
     private fun startRecordingInternal(): Boolean {
+        Log.d("MainViewModel", "🎬 startRecordingInternal: Initiating recording")
+        
         val streamSnapshot = stream
         if (streamSnapshot == null) {
+            Log.e("MainViewModel", "❌ Recording failed: Stream not ready")
             streamingEventMutableSharedFlow.tryEmit(
                 StreamingEvent("Recording failed: Stream not ready")
             )
             return false
         }
 
+        // Double-check recording state (defensive programming)
         if (_isRecording.value) {
+            Log.w("MainViewModel", "⚠️ Recording is already in progress (double-check)")
             streamingEventMutableSharedFlow.tryEmit(
                 StreamingEvent("Recording is already in progress")
             )
             return true
         }
 
-        ledController.startLedBlinking()
+        // ⚠️ LED控制已移至回调中，确保与实际录像状态同步
+        // LED will be started in RecordController.Status.STARTED callback
 
         try {
             // Generate recording file path
@@ -575,9 +688,16 @@ class MainViewModel(
                 object : RecordController.Listener {
                     override fun onStatusChange(status: RecordController.Status) {
                         // Recording status callback
+                        Log.d("MainViewModel", "📹 Recording status changed: $status")
                         when (status) {
                             RecordController.Status.STARTED -> {
+                                Log.i("MainViewModel", "✅ Recording STARTED successfully")
                                 _isRecording.value = true
+                                
+                                // ✅ 在录像真正开始后才启动LED闪烁
+                                ledController.startLedBlinking()
+                                Log.d("MainViewModel", "💡 LED blinking started")
+                                
                                 // Duration timer removed - frontend now handles timing
                                 // recordingStartTime = System.currentTimeMillis()
                                 // startRecordingDurationTimer()
@@ -587,8 +707,10 @@ class MainViewModel(
                                 )
                             }
                             RecordController.Status.STOPPED -> {
+                                Log.i("MainViewModel", "⏹️ Recording STOPPED")
                                 _isRecording.value = false
                                 ledController.stopLedBlinking()
+                                Log.d("MainViewModel", "💡 LED blinking stopped")
                                 // Duration timer removed - frontend now handles timing
                                 // stopRecordingDurationTimer()
                                 ttsManager.speakRecordingFinished()
@@ -648,12 +770,16 @@ class MainViewModel(
                     }
                 }
             )
+            Log.i("MainViewModel", "📹 Recording API call successful, waiting for STARTED callback")
             return true
         } catch (e: Exception) {
+            Log.e("MainViewModel", "❌ Failed to start recording", e)
             streamingEventMutableSharedFlow.tryEmit(
                 StreamingEvent("Failed to start recording: ${e.message}")
             )
             _isRecording.value = false
+            // LED hasn't been started yet (only starts in STARTED callback), so no need to stop it
+            // But add defensive stop just in case
             ledController.stopLedBlinking()
             return false
         }
@@ -661,21 +787,40 @@ class MainViewModel(
 
     /**
      * Stop recording.
+     * Thread-safe: Uses operation lock to prevent concurrent operations.
+     * 
+     * @param onResult Optional callback with result: true if stop was initiated, false if failed or not recording
      */
-    fun stopRecording() {
+    fun stopRecording(onResult: ((Boolean) -> Unit)? = null) {
+        Log.i("MainViewModel", "⏹️ Recording stop requested. Current state: isRecording=${_isRecording.value}, operationInProgress=$isRecordingOperationInProgress")
+        
+        // Check if another recording operation is in progress
+        if (isRecordingOperationInProgress) {
+            Log.w("MainViewModel", "⚠️ Recording operation in progress, cannot stop yet")
+            streamingEventMutableSharedFlow.tryEmit(
+                StreamingEvent("Recording operation in progress, please wait")
+            )
+            onResult?.invoke(false)
+            return
+        }
+        
         val streamSnapshot = stream ?: run {
-            Log.w("MainViewModel", "Cannot stop recording: stream is null")
+            Log.w("MainViewModel", "⚠️ Cannot stop recording: stream is null")
             _isRecording.value = false
+            // Ensure LED is stopped even if stream is null
+            ledController.stopLedBlinking()
+            onResult?.invoke(false)
             return
         }
         
         if (!_isRecording.value) {
-            Log.w("MainViewModel", "Recording is not active")
+            Log.w("MainViewModel", "⚠️ Recording is not active, ignoring stop request")
+            onResult?.invoke(false)
             return
         }
         
         try {
-            Log.i("MainViewModel", "Stopping recording...")
+            Log.i("MainViewModel", "🛑 Stopping recording...")
             streamSnapshot.stopRecord()
             // The status will be updated in the callback.
             // 延迟检查相机资源释放，给录制停止回调足够的时间来完成 MD5 计算
@@ -684,6 +829,7 @@ class MainViewModel(
                 delay(2000) // 等待 2 秒：100ms 状态更新 + 1000ms MD5 延迟 + 额外缓冲
                 checkAndReleaseCamera()
             }
+            onResult?.invoke(true)
         } catch (e: Exception) {
             Log.e("MainViewModel", "Failed to stop recording", e)
             streamingEventMutableSharedFlow.tryEmit(
@@ -695,6 +841,7 @@ class MainViewModel(
                 delay(500)
                 checkAndReleaseCamera()
             }
+            onResult?.invoke(false)
         }
     }
 
@@ -740,6 +887,12 @@ class MainViewModel(
         }
 
         override fun onNewBitrate(bitrate: Long) {
+            // Bitrate monitoring and diagnostics
+            if (bitrate == 0L) {
+                viewModel.onZeroBitrateDetected()
+            } else {
+                viewModel.onNonZeroBitrateDetected()
+            }
             streamingEventMutableSharedFlow.tryEmit(StreamingEvent("onNewBitrate: $bitrate"))
         }
     }
@@ -971,6 +1124,61 @@ class MainViewModel(
     fun showToast(message: String) {
         viewModelScope.launch(Dispatchers.Main) {
             Toast.makeText(application, message, Toast.LENGTH_LONG).show()
+        }
+    }
+    
+    /**
+     * Called when zero bitrate is detected
+     */
+    internal fun onZeroBitrateDetected() {
+        consecutiveZeroBitrateCount++
+        
+        if (consecutiveZeroBitrateCount >= ZERO_BITRATE_WARNING_THRESHOLD) {
+            val currentTime = System.currentTimeMillis()
+            if (currentTime - lastBitrateWarningTime >= WARNING_COOLDOWN_MS) {
+                lastBitrateWarningTime = currentTime
+                
+                // Diagnose the issue
+                val diagnosis = diagnoseBitrateIssue()
+                Log.w("MainViewModel", "⚠️ Zero bitrate detected for $consecutiveZeroBitrateCount consecutive reports. Diagnosis: $diagnosis")
+                
+                streamingEventMutableSharedFlow.tryEmit(
+                    StreamingEvent("⚠️ Streaming issue: $diagnosis")
+                )
+            }
+        }
+    }
+    
+    /**
+     * Called when non-zero bitrate is detected
+     */
+    internal fun onNonZeroBitrateDetected() {
+        if (consecutiveZeroBitrateCount > 0) {
+            Log.d("MainViewModel", "✅ Bitrate recovered after $consecutiveZeroBitrateCount zero reports")
+        }
+        consecutiveZeroBitrateCount = 0
+    }
+    
+    /**
+     * Diagnose why bitrate is zero
+     */
+    private fun diagnoseBitrateIssue(): String {
+        val streamSnapshot = stream
+        
+        return when {
+            streamSnapshot == null -> "No stream object (internal error)"
+            
+            !streamSnapshot.isOnPreview && shouldShowPreview -> 
+                "Camera preview stopped unexpectedly"
+            
+            !streamSnapshot.isStreaming -> 
+                "Stream disconnected (checking network)"
+            
+            _connectionStatus.value != ConnectionStatus.CONNECTED -> 
+                "Connection not stable (status: ${_connectionStatus.value})"
+            
+            else -> 
+                "Low/No data from camera or network congestion. Check WiFi signal."
         }
     }
 
