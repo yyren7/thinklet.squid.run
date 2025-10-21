@@ -1,6 +1,8 @@
 package ai.fd.thinklet.app.squid.run
 
 import android.util.Log
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.FileInputStream
 import java.security.MessageDigest
@@ -64,7 +66,7 @@ object MD5Utils {
     }
     
     /**
-     * 读取已缓存的 MD5 值
+     * 读取已缓存的 MD5 值（同步版本）
      * @param file 视频文件
      * @return MD5 字符串，如果读取失败返回空字符串
      */
@@ -87,6 +89,15 @@ object MD5Utils {
             Log.w(TAG, "Failed to read MD5 file for: ${file.name}", e)
             ""
         }
+    }
+    
+    /**
+     * 读取已缓存的 MD5 值（异步版本，用于协程）
+     * @param file 视频文件
+     * @return MD5 字符串，如果读取失败返回空字符串
+     */
+    suspend fun readMD5FromFileAsync(file: File): String = withContext(Dispatchers.IO) {
+        readMD5FromFile(file)
     }
 }
 

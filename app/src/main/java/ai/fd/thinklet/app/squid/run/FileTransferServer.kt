@@ -5,6 +5,10 @@ import android.os.Environment
 import android.util.Log
 import com.google.gson.Gson
 import fi.iki.elonen.NanoHTTPD
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.runBlocking
 import java.io.File
 import java.io.FileInputStream
 import java.io.IOException
@@ -47,6 +51,14 @@ class FileTransferServer(
                 uri.startsWith("/delete/") && session.method == Method.DELETE -> handleDelete(uri)
                 else -> newFixedLengthResponse(Response.Status.NOT_FOUND, MIME_PLAINTEXT, "Not Found")
             }
+        } catch (e: java.net.SocketException) {
+            // 客户端断开连接（如超时），这是正常情况，只记录警告
+            Log.w(TAG, "Client disconnected: ${e.message} (This is usually due to client timeout)")
+            newFixedLengthResponse(
+                Response.Status.INTERNAL_ERROR,
+                "application/json",
+                gson.toJson(mapOf("error" to "Client disconnected"))
+            )
         } catch (e: Exception) {
             Log.e(TAG, "Failed to handle request", e)
             newFixedLengthResponse(
@@ -62,37 +74,59 @@ class FileTransferServer(
      * API: GET /files
      * Response: [{"name": "xxx.mp4", "size": 12345, "lastModified": 1234567890, "md5": "abc123..."}]
      * 只返回存在同名 .md5 文件的视频文件
+     * 
+     * 性能优化：使用协程并行读取多个MD5文件
      */
     private fun handleFileList(): Response {
-        val files = recordFolder.listFiles { file ->
-            // 只返回 .mp4 文件，且必须存在对应的 .md5 文件
+        val startTime = System.currentTimeMillis()
+        
+        // 第一步：筛选出所有有效的 .mp4 文件（存在对应的 .md5 文件）
+        val validFiles = recordFolder.listFiles { file ->
             if (!file.isFile || !file.name.endsWith(".mp4")) {
                 return@listFiles false
             }
-            
             val md5File = File(file.parent, "${file.name}.md5")
             md5File.exists()
-        }?.mapNotNull { file ->
-            // 读取 MD5 值
-            val md5 = MD5Utils.readMD5FromFile(file)
-            if (md5.isEmpty()) {
-                Log.w(TAG, "MD5 file exists but invalid for: ${file.name}")
-                return@mapNotNull null
-            }
-            
-            mapOf(
-                "name" to file.name,
-                "size" to file.length(),
-                "lastModified" to file.lastModified(),
-                "md5" to md5
-            )
-        } ?: emptyList()
+        } ?: emptyArray()
+        
+        val filterTime = System.currentTimeMillis()
+        Log.d(TAG, "File filtering complete: ${validFiles.size} files, took ${filterTime - startTime}ms")
+        
+        // 第二步：使用协程并行读取所有 MD5 文件
+        val files = runBlocking(Dispatchers.IO) {
+            validFiles.map { file ->
+                async {
+                    // 并行读取 MD5
+                    val md5 = MD5Utils.readMD5FromFileAsync(file)
+                    if (md5.isEmpty()) {
+                        Log.w(TAG, "MD5 file exists but invalid for: ${file.name}")
+                        null
+                    } else {
+                        mapOf(
+                            "name" to file.name,
+                            "size" to file.length(),
+                            "lastModified" to file.lastModified(),
+                            "md5" to md5
+                        )
+                    }
+                }
+            }.awaitAll().filterNotNull()
+        }
 
-        return newFixedLengthResponse(
+        val processingTime = System.currentTimeMillis() - startTime
+        Log.d(TAG, "File list prepared: ${files.size} files, took ${processingTime}ms (parallel MD5 reading)")
+
+        val response = newFixedLengthResponse(
             Response.Status.OK,
             "application/json",
             gson.toJson(files)
         )
+        
+        // 保留 GZIP 压缩以减少网络传输数据量
+        // NanoHTTPD 会根据客户端的 Accept-Encoding 头自动决定是否压缩
+        response.addHeader("Access-Control-Allow-Origin", "*")
+        
+        return response
     }
 
     /**

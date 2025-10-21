@@ -522,6 +522,8 @@ class MainActivity : AppCompatActivity() {
         // If not yet inflated, inflate it first.
         if (!isPreviewInflated) {
             inflateAndSetupPreview()
+            // Make sure the preview is visible
+            previewBinding?.preview?.visibility = android.view.View.VISIBLE
         } else {
             // It's already inflated, just show it and start the preview.
             previewBinding?.preview?.visibility = android.view.View.VISIBLE
