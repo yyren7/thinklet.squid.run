@@ -50,11 +50,11 @@ class TTSManager(private val context: Context) : TextToSpeech.OnInitListener {
         if (isBootScenario) {
             // Boot scenario: delay TTS initialization to give system time to stabilize
             // This prevents Pico TTS service from crashing when called too early
-            Log.i(TAG, "⏱️ Boot scenario detected (uptime < 90s), delaying TTS initialization by 3 seconds...")
+            Log.i(TAG, "⏱️ Boot scenario detected (uptime < 90s), delaying TTS initialization by 5 seconds...")
             handler.postDelayed({
                 Log.i(TAG, "✅ Boot delay complete, initializing TTS...")
                 initializeTTS()
-            }, 3000) // 3 seconds delay for boot scenario
+            }, 5000) // 5 seconds delay for boot scenario (increased from 3s)
         } else {
             // Normal scenario: initialize immediately
             Log.d(TAG, "Normal startup, initializing TTS immediately")
@@ -89,7 +89,17 @@ class TTSManager(private val context: Context) : TextToSpeech.OnInitListener {
     override fun onInit(status: Int) {
         if (status == TextToSpeech.SUCCESS) {
             Log.i(TAG, "✅ TTS initialized successfully")
-            _ttsReady.value = true
+            
+            // Additional safety delay: wait for TTS engine to fully stabilize
+            // before marking as ready, especially important during boot
+            val isBootScenario = isRecentBoot()
+            val stabilizationDelay = if (isBootScenario) 2000L else 500L
+            
+            Log.d(TAG, "⏳ Waiting ${stabilizationDelay}ms for TTS engine to stabilize...")
+            handler.postDelayed({
+                _ttsReady.value = true
+                Log.i(TAG, "✅ TTS is now ready for use")
+            }, stabilizationDelay)
         } else {
             Log.e(TAG, "❌ TTS initialization failed with status: $status")
             _ttsReady.value = false
