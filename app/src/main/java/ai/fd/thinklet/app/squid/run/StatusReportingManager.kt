@@ -31,6 +31,11 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.flow
 
+enum class DeviceType {
+    LANDSCAPE, // 横向设备 (M开头)
+    PORTRAIT   // 纵向设备 (P开头)
+}
+
 data class DeviceStatus(
     val batteryLevel: Int,
     val isCharging: Boolean,
@@ -73,6 +78,7 @@ class StatusReportingManager(
     private val gson = Gson()
     val deviceId: String
     val deviceIdSource: String
+    val deviceType: DeviceType
 
     // File transfer server - 完全从属于 StatusReportingManager
     // 只能通过 start() 和 stop() 方法来控制生命周期
@@ -112,6 +118,10 @@ class StatusReportingManager(
         val (id, source) = initializeDeviceId()
         this.deviceId = id
         this.deviceIdSource = source
+        this.deviceType = when {
+            id.startsWith("P", ignoreCase = true) -> DeviceType.PORTRAIT
+            else -> DeviceType.LANDSCAPE // M开头或其他情况，默认为横向
+        }
         // Start listening to network state changes
         GlobalScope.launch {
             var isFirstNetworkCheck = true

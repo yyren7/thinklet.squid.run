@@ -56,6 +56,10 @@ class MainViewModel(
     savedState: SavedStateHandle
 ) : AndroidViewModel(application) {
 
+    private val statusReportingManager: StatusReportingManager by lazy {
+        (application as SquidRunApplication).statusReportingManager
+    }
+
     val ttsManager: TTSManager by lazy {
         (application as SquidRunApplication).ttsManager
     }
@@ -304,16 +308,32 @@ class MainViewModel(
             ).apply {
                 getGlInterface().autoHandleOrientation = false
             }
+
+            // ================= Refactored Video Setup Logic =================
+            // 统一处理视频旋转和尺寸，解决代码分散问题
+            val (videoWidth, videoHeight, rotation) = when (statusReportingManager.deviceType) {
+                DeviceType.PORTRAIT -> {
+                    // P-series (纵向设备): 设置旋转滤镜和参数
+                    val rotationFilter = RotationFilterRender()
+                    rotationFilter.setRotation(90)
+                    localStream.getGlInterface().setFilter(rotationFilter)
+                    // 返回尺寸和旋转角度
+                    Triple(shortSide, longSide, 90)
+                }
+                DeviceType.LANDSCAPE -> {
+                    // M-series (横向设备): 使用原有的逻辑
+                    Triple(longSide, shortSide, getDeviceRotation())
+                }
+            }
+            // =================================================================
+
             val isPrepared = try {
-                // Note: The output size is converted by 90 degrees inside RootEncoder when the rotation
-                // is portrait. Therefore, we intentionally pass `longSide` and `shortSide` to `width`
-                // and `height` respectively so that it will be output at the correct size.
                 val isVideoPrepared = localStream.prepareVideo(
-                    width = longSide,
-                    height = shortSide,
+                    width = videoWidth,
+                    height = videoHeight,
                     fps = videoFps,
                     bitrate = videoBitrateBps,
-                    rotation = getDeviceRotation()
+                    rotation = rotation
                 )
                 val isAudioPrepared = localStream.prepareAudio(
                     sampleRate = audioSampleRateHz,
