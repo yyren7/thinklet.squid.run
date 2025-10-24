@@ -40,6 +40,10 @@ class MainActivity : AppCompatActivity() {
 
     private val viewModel: MainViewModel by viewModels()
 
+    private val ttsManager: SherpaOnnxTTSManager by lazy {
+        (application as SquidRunApplication).ttsManager
+    }
+
     private val statusReportingManager: StatusReportingManager by lazy {
         (application as SquidRunApplication).statusReportingManager
     }
@@ -288,14 +292,6 @@ class MainActivity : AppCompatActivity() {
         LocalBroadcastManager.getInstance(this).registerReceiver(streamingControlReceiver, IntentFilter("streaming-control"))
         LocalBroadcastManager.getInstance(this).registerReceiver(recordingControlReceiver, IntentFilter("recording-control"))
         
-        // TTS 播报 app 已准备好
-        // 等待 TTS 初始化完成后再播报
-        lifecycleScope.launch {
-            Log.d("MainActivity", "⏳ Waiting for TTS to be ready before announcing...")
-            viewModel.ttsManager.ttsReady.first { it }
-            Log.i("MainActivity", "✅ TTS is ready, announcing application prepared")
-            viewModel.ttsManager.speakApplicationPrepared()
-        }
     }
 
     override fun onDestroy() {
@@ -410,7 +406,7 @@ class MainActivity : AppCompatActivity() {
         vibrator.vibrate(VibrationEffect.createWaveform(timings, amplitudes, -1))
 
         // 2. TTS 语音播报
-        viewModel.ttsManager.speakPowerDown()
+        ttsManager.speakPowerDown()
 
         // 3. 发送离线状态并准备关机
         statusReportingManager.sendOfflineStatusAndStop()
@@ -420,9 +416,11 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun handleVolumeUpKeyPress(): Boolean {
-        val statusMessage = viewModel.ttsManager.getBatteryAndNetworkStatusMessage()
+        val batteryPercentage = ttsManager.getBatteryPercentage()
+        val networkStatus = ttsManager.getNetworkStatus()
+        val statusMessage = "battery status: ${batteryPercentage}% remaining, network status: $networkStatus"
         viewModel.showToast(statusMessage)
-        viewModel.ttsManager.speakBatteryAndNetworkStatus()
+        ttsManager.speakBatteryAndNetworkStatus()
         return true
     }
 

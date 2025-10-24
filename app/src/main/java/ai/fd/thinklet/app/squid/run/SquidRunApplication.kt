@@ -7,6 +7,8 @@ import androidx.lifecycle.ViewModelStore
 import androidx.lifecycle.ViewModelStoreOwner
 import kotlinx.coroutines.GlobalScope
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.first
+import android.util.Log
 
 class SquidRunApplication : Application(), ViewModelStoreOwner {
     override val viewModelStore: ViewModelStore by lazy {
@@ -40,11 +42,18 @@ class SquidRunApplication : Application(), ViewModelStoreOwner {
         // so it will be created and started the first time it is accessed.
         // We can trigger the creation here if we want it to start immediately with the app.
         statusReportingManager
+
+        // 在 Application 层播报，确保整个应用生命周期只播报一次
+        GlobalScope.launch {
+            ttsManager.ttsReady.first { it }
+            Log.i("SquidRunApplication", "✅ TTS ready, announcing application prepared")
+            ttsManager.speakApplicationPrepared()
+        }
     }
 
     // Lazy initialization of TTSManager to ensure it's created only once.
-    val ttsManager: TTSManager by lazy {
-        TTSManager(applicationContext)
+    val ttsManager: SherpaOnnxTTSManager by lazy {
+        SherpaOnnxTTSManager(applicationContext)
     }
 
     override fun onTerminate() {
@@ -52,7 +61,7 @@ class SquidRunApplication : Application(), ViewModelStoreOwner {
         // when the application is terminating.
         statusReportingManager.stop()
         networkManager.unregisterCallback() // Unregister network callback
-        ttsManager.shutdown()
+        ttsManager.shutdown()  // 调用相同的shutdown方法
         super.onTerminate()
     }
 }

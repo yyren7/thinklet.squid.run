@@ -60,7 +60,7 @@ class MainViewModel(
         (application as SquidRunApplication).statusReportingManager
     }
 
-    val ttsManager: TTSManager by lazy {
+    val ttsManager: SherpaOnnxTTSManager by lazy {
         (application as SquidRunApplication).ttsManager
     }
     private val ledController = LedController(application)
@@ -1089,23 +1089,23 @@ class MainViewModel(
         Log.i("MainViewModel", "ViewModel is being cleared")
         
         stream?.let { localStream ->
-            // 使用 runBlocking + Dispatchers.IO 在后台线程同步等待
-            // 这样不会阻塞主线程的消息队列，但确保录制正确停止
-            try {
-                kotlinx.coroutines.runBlocking(Dispatchers.IO) {
-                    // 如果正在录制，必须先停止录制
+            // Use viewModelScope.launch(Dispatchers.IO) to perform cleanup in the background
+            // This avoids blocking the main thread, which can cause ANRs.
+            viewModelScope.launch(Dispatchers.IO) {
+                try {
+                    // If recording is active, stop it first
                     if (localStream.isRecording) {
                         Log.w("MainViewModel", "Recording is still active during onCleared, forcing stop")
                         try {
                             localStream.stopRecord()
-                            // 等待文件系统释放锁，确保文件完整写入
+                            // Wait for the file system to release the lock
                             delay(500)
                         } catch (e: Exception) {
                             Log.e("MainViewModel", "Failed to stop recording in onCleared", e)
                         }
                     }
-                    
-                    // 停止推流
+
+                    // Stop streaming
                     if (localStream.isStreaming) {
                         try {
                             localStream.stopStream()
@@ -1113,8 +1113,8 @@ class MainViewModel(
                             Log.e("MainViewModel", "Failed to stop streaming in onCleared", e)
                         }
                     }
-                    
-                    // 停止预览
+
+                    // Stop preview
                     if (localStream.isOnPreview) {
                         try {
                             localStream.stopPreview()
@@ -1122,17 +1122,17 @@ class MainViewModel(
                             Log.e("MainViewModel", "Failed to stop preview in onCleared", e)
                         }
                     }
-                    
-                    // 释放资源
+
+                    // Release resources
                     try {
                         localStream.release()
                         Log.i("MainViewModel", "All camera resources released in onCleared")
                     } catch (e: Exception) {
                         Log.e("MainViewModel", "Failed to release camera resources in onCleared", e)
                     }
+                } catch (e: Exception) {
+                    Log.e("MainViewModel", "Exception during cleanup in onCleared", e)
                 }
-            } catch (e: Exception) {
-                Log.e("MainViewModel", "Exception during cleanup in onCleared", e)
             }
         }
         

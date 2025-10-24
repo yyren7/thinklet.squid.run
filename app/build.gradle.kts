@@ -48,6 +48,7 @@ android {
 
 dependencies {
 
+    implementation(files("libs/sherpa-onnx-1.12.15.aar"))
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.appcompat)
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
