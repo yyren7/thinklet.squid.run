@@ -7,6 +7,8 @@ import android.media.AudioTrack
 import android.os.BatteryManager
 import android.os.Handler
 import android.os.Looper
+import android.os.VibrationEffect
+import android.os.Vibrator
 import android.util.Log
 import com.k2fsa.sherpa.onnx.*
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -28,6 +30,10 @@ class SherpaOnnxTTSManager(private val context: Context) {
     private var tts: OfflineTts? = null
     private var audioTrack: AudioTrack? = null
     private val handler = Handler(Looper.getMainLooper())
+
+    private val vibrator: Vibrator by lazy(LazyThreadSafetyMode.NONE) {
+        checkNotNull(context.getSystemService())
+    }
     
     private val _ttsReady = MutableStateFlow(false)
     val ttsReady: StateFlow<Boolean> = _ttsReady.asStateFlow()
@@ -236,6 +242,7 @@ class SherpaOnnxTTSManager(private val context: Context) {
     }
     
     fun speakApplicationPrepared() {
+        vibrator.vibrate(VibrationEffect.createOneShot(200, VibrationEffect.DEFAULT_AMPLITUDE))
         speak("application prepared")
     }
     

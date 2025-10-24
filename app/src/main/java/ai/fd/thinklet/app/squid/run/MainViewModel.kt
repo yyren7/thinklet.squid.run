@@ -404,36 +404,8 @@ class MainViewModel(
     }
 
     fun activityOnPause() {
-        // 如果正在录制或推流，保持所有资源（相机、录制、推流）
-        if (_isRecording.value || _isStreaming.value) {
-            Log.w("MainViewModel", "Recording or streaming in progress, keeping all resources active")
-            // 停止预览以节省资源，但保持相机、录制和推流
-            // checkAndReleaseCamera() 会检查录制和推流状态，不会释放相机
-            stopPreview()
-            return
-        }
-        
-        // 如果没有在录制或推流，正常清理所有资源
-        Log.i("MainViewModel", "Activity pausing, cleaning up resources")
-        val streamSnapshot = stream
-        if (streamSnapshot != null) {
-            // 停止所有活动
-            if (streamSnapshot.isStreaming) {
-                streamSnapshot.stopStream()
-                _isStreaming.value = false
-                _connectionStatus.value = ConnectionStatus.IDLE
-            }
-            if (streamSnapshot.isOnPreview) {
-                streamSnapshot.stopPreview()
-                _isPreviewActive.value = false
-            }
-            // 释放资源（只调用一次）
-            releaseCamera()
-        } else {
-            // stream已经为null，只需要确保状态正确
-            _isPrepared.value = false
-            _isPreviewActive.value = false
-        }
+        // 根据用户要求，即使在暂停时也保持所有资源，因为这是单用途设备。
+        Log.i("MainViewModel", "Activity pausing, but keeping all resources active as per requirement.")
     }
 
     fun activityOnResume() {

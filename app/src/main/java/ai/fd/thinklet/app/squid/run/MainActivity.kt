@@ -99,8 +99,6 @@ class MainActivity : AppCompatActivity() {
             Log.e("ThinkletExtension", "Failed to configure auto-launch", e)
         }
 
-        vibrator.vibrate(VibrationEffect.createOneShot(200, DEFAULT_AMPLITUDE))
-
         // Set the streamKey to the deviceId once, as it's now fixed.
         val deviceId = statusReportingManager.deviceId
         viewModel.setStreamKey(deviceId)
