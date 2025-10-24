@@ -12,11 +12,16 @@ object DefaultConfig {
     const val DEFAULT_STREAM_KEY = "test_stream"
     
     // Video Configuration
-    const val DEFAULT_LONG_SIDE = 1920
-    const val DEFAULT_SHORT_SIDE = 1080
+    const val DEFAULT_LONG_SIDE = 640
+    const val DEFAULT_SHORT_SIDE = 360
     const val DEFAULT_ORIENTATION = "landscape" // "landscape" or "portrait"
-    const val DEFAULT_VIDEO_BITRATE = 4096 // kbps
+    const val DEFAULT_VIDEO_BITRATE = 512 // kbps
     const val DEFAULT_VIDEO_FPS = 24 // fps
+
+    // Recording-specific Video Configuration (can be different from streaming)
+    const val DEFAULT_RECORD_VIDEO_WIDTH = 1920
+    const val DEFAULT_RECORD_VIDEO_HEIGHT = 1080
+    const val DEFAULT_RECORD_VIDEO_BITRATE = 8192 // kbps, higher quality for local recording
     
     // Audio Configuration
     const val DEFAULT_AUDIO_SAMPLE_RATE = 48000 // Hz

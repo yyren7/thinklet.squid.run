@@ -149,6 +149,11 @@ class MainViewModel(
     val isEchoCancelerEnabled: Boolean = savedState.get<Boolean>("echoCanceler") ?: DefaultConfig.DEFAULT_ECHO_CANCELER
     val shouldShowPreview: Boolean = savedState.get<Boolean>("preview") ?: DefaultConfig.DEFAULT_PREVIEW
 
+    // Recording-specific settings
+    val recordVideoWidth: Int = savedState.get<Int>("recordVideoWidth") ?: DefaultConfig.DEFAULT_RECORD_VIDEO_WIDTH
+    val recordVideoHeight: Int = savedState.get<Int>("recordVideoHeight") ?: DefaultConfig.DEFAULT_RECORD_VIDEO_HEIGHT
+    val recordBitrateBps: Int = savedState.get<Int>("recordBitrate")?.let { it * 1024 } ?: (DefaultConfig.DEFAULT_RECORD_VIDEO_BITRATE * 1024)
+
     private val _connectionStatus = MutableStateFlow(ConnectionStatus.IDLE)
     val connectionStatus: StateFlow<ConnectionStatus> = _connectionStatus.asStateFlow()
 
@@ -257,8 +262,8 @@ class MainViewModel(
     }
 
     @MainThread
-    suspend fun maybePrepareStreaming() {
-        Log.d("MainViewModel", "maybePrepareStreaming called")
+    suspend fun prepareSources() {
+        Log.d("MainViewModel", "prepareSources called")
         if (_isPrepared.value) {
             return
         }
@@ -269,7 +274,7 @@ class MainViewModel(
             return
         }
         
-        if (streamUrl.value.isBlank() || streamKey.value.isNullOrBlank() || !isAllPermissionGranted()) {
+        if (!isAllPermissionGranted()) {
             _isPrepared.value = false
             return
         }
@@ -333,7 +338,10 @@ class MainViewModel(
                     height = videoHeight,
                     fps = videoFps,
                     bitrate = videoBitrateBps,
-                    rotation = rotation
+                    rotation = rotation,
+                    recordWidth = recordVideoWidth,
+                    recordHeight = recordVideoHeight,
+                    recordBitrate = recordBitrateBps
                 )
                 val isAudioPrepared = localStream.prepareAudio(
                     sampleRate = audioSampleRateHz,
@@ -530,7 +538,7 @@ class MainViewModel(
             // Ensure the camera is ready
             if (!_isPrepared.value) {
                 Log.i("MainViewModel", "Starting preview: Camera not ready, initializing...")
-                maybePrepareStreaming()
+                prepareSources()
             }
             
             // Wait until the stream is prepared before starting the preview.
@@ -1022,7 +1030,7 @@ class MainViewModel(
         }
         
         viewModelScope.launch {
-            maybePrepareStreaming()
+            prepareSources()
             isPrepared.first { it }
             onReady()
         }

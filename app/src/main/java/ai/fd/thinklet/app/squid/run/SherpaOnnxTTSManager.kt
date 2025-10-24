@@ -32,7 +32,7 @@ class SherpaOnnxTTSManager(private val context: Context) {
     private val handler = Handler(Looper.getMainLooper())
 
     private val vibrator: Vibrator by lazy(LazyThreadSafetyMode.NONE) {
-        checkNotNull(context.getSystemService())
+        context.getSystemService(Vibrator::class.java)
     }
     
     private val _ttsReady = MutableStateFlow(false)
