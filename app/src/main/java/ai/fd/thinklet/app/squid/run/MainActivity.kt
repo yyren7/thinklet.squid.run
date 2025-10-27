@@ -68,6 +68,73 @@ class MainActivity : AppCompatActivity() {
     private var lastCameraClickTime = 0L
     private val CAMERA_CLICK_DEBOUNCE_MS = 1000
 
+    private val streamingControlReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            when (intent?.getStringExtra("action")) {
+                "start" -> {
+                    if (!viewModel.isStreaming.value) {
+                        viewModel.maybeStartStreaming { isStreamingStarted ->
+                            if (!isStreamingStarted) {
+                                vibrator.vibrate(createStaccatoVibrationEffect(2))
+                            }
+                        }
+                    }
+                }
+                "stop" -> {
+                    if (viewModel.isStreaming.value) {
+                        viewModel.stopStreaming()
+                    }
+                }
+            }
+        }
+    }
+
+    private val recordingControlReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            when (intent?.getStringExtra("action")) {
+                "start" -> {
+                    // Remove checks from MainActivity layer, unify handling in ViewModel layer.
+                    // ViewModel's concurrency protection will handle repeated requests.
+                    viewModel.startRecording { isRecordingStarted ->
+                        if (isRecordingStarted) {
+                            vibrator.vibrate(createStaccatoVibrationEffect(1))
+                        } else {
+                            vibrator.vibrate(createStaccatoVibrationEffect(3))
+                        }
+                    }
+                }
+                "stop" -> {
+                    // Remove checks from MainActivity layer, unify handling in ViewModel layer.
+                    // ViewModel will check the status and log appropriately.
+                    viewModel.stopRecording { isStopInitiated ->
+                        if (isStopInitiated) {
+                            vibrator.vibrate(createStaccatoVibrationEffect(2))
+                        } else {
+                            // Use different vibration feedback for stop failure or not recording.
+                            vibrator.vibrate(createStaccatoVibrationEffect(3))
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private val serverConnectionReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            if (intent?.action == StatusReportingManager.ACTION_SERVER_DISCONNECTED) {
+                // Only trigger auto-stop for SRT, as RTMP has its own TCP-based disconnection handling.
+                if (viewModel.streamProtocol.value == "srt") {
+                    Log.w("MainActivity", "Server disconnected (WebSocket failure) and protocol is SRT. Stopping stream.")
+                    if (viewModel.isStreaming.value) {
+                        viewModel.stopStreaming()
+                    }
+                } else {
+                    Log.i("MainActivity", "Server disconnected (WebSocket failure), but protocol is RTMP. Letting RTMP handle disconnection.")
+                }
+            }
+        }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         
@@ -167,10 +234,11 @@ class MainActivity : AppCompatActivity() {
                 return@setOnClickListener
             }
             
-            // Simple IP format validation (basic check)
+            // Simple IP format validation (basic check) - also allow hostnames
             val ipPattern = "^\\d{1,3}(\\.\\d{1,3}){3}$".toRegex()
-            if (!newServerIp.matches(ipPattern)) {
-                viewModel.showToast("Invalid IP address format. Example: 192.168.1.100")
+            val hostnamePattern = "^[a-zA-Z0-9][a-zA-Z0-9-\\.]*[a-zA-Z0-9]$".toRegex()
+            if (!newServerIp.matches(ipPattern) && !newServerIp.matches(hostnamePattern)) {
+                viewModel.showToast("Invalid IP/hostname format. Example: 192.168.1.100")
                 return@setOnClickListener
             }
             
@@ -198,6 +266,8 @@ class MainActivity : AppCompatActivity() {
             // Show the preview (this will trigger surfaceChanged and start the camera).
             showPreview()
         }
+
+        setupReceivers()
 
         lifecycleScope.launch {
             viewModel.connectionStatus
@@ -288,9 +358,6 @@ class MainActivity : AppCompatActivity() {
         binding.buttonTogglePreview.setOnClickListener {
             togglePreview()
         }
-
-        LocalBroadcastManager.getInstance(this).registerReceiver(streamingControlReceiver, IntentFilter("streaming-control"))
-        LocalBroadcastManager.getInstance(this).registerReceiver(recordingControlReceiver, IntentFilter("recording-control"))
         
     }
 
@@ -298,13 +365,7 @@ class MainActivity : AppCompatActivity() {
         Log.i("MainActivity", "🛑 Activity is being destroyed, cleaning up resources...")
         
         // Unregister broadcast receivers first to avoid receiving new commands during cleanup.
-        try {
-            LocalBroadcastManager.getInstance(this).unregisterReceiver(streamingControlReceiver)
-            LocalBroadcastManager.getInstance(this).unregisterReceiver(recordingControlReceiver)
-            Log.d("MainActivity", "✅ StreamingControlReceiver unregistered")
-        } catch (e: Exception) {
-            Log.e("MainActivity", "❌ Failed to unregister receiver", e)
-        }
+        unregisterReceivers()
         
         Log.i("MainActivity", "✅ Activity cleanup completed")
         super.onDestroy()
@@ -426,57 +487,6 @@ class MainActivity : AppCompatActivity() {
 
     private fun handleVolumeDownKeyUp(): Boolean {
         return true
-    }
-
-    private val streamingControlReceiver = object : BroadcastReceiver() {
-        override fun onReceive(context: Context?, intent: Intent?) {
-            when (intent?.getStringExtra("action")) {
-                "start" -> {
-                    if (!viewModel.isStreaming.value) {
-                        viewModel.maybeStartStreaming { isStreamingStarted ->
-                            if (!isStreamingStarted) {
-                                vibrator.vibrate(createStaccatoVibrationEffect(2))
-                            }
-                        }
-                    }
-                }
-                "stop" -> {
-                    if (viewModel.isStreaming.value) {
-                        viewModel.stopStreaming()
-                    }
-                }
-            }
-        }
-    }
-
-    private val recordingControlReceiver = object : BroadcastReceiver() {
-        override fun onReceive(context: Context?, intent: Intent?) {
-            when (intent?.getStringExtra("action")) {
-                "start" -> {
-                    // Remove checks from MainActivity layer, unify handling in ViewModel layer.
-                    // ViewModel's concurrency protection will handle repeated requests.
-                    viewModel.startRecording { isRecordingStarted ->
-                        if (isRecordingStarted) {
-                            vibrator.vibrate(createStaccatoVibrationEffect(1))
-                        } else {
-                            vibrator.vibrate(createStaccatoVibrationEffect(3))
-                        }
-                    }
-                }
-                "stop" -> {
-                    // Remove checks from MainActivity layer, unify handling in ViewModel layer.
-                    // ViewModel will check the status and log appropriately.
-                    viewModel.stopRecording { isStopInitiated ->
-                        if (isStopInitiated) {
-                            vibrator.vibrate(createStaccatoVibrationEffect(2))
-                        } else {
-                            // Use different vibration feedback for stop failure or not recording.
-                            vibrator.vibrate(createStaccatoVibrationEffect(3))
-                        }
-                    }
-                }
-            }
-        }
     }
 
     private fun toggleAudioMute() {
@@ -680,5 +690,24 @@ class MainActivity : AppCompatActivity() {
         
         viewModel.showToast("Server IP updated to: $newIp")
         Log.i("MainActivity", "✅ IP change handling completed")
+    }
+
+    private fun setupReceivers() {
+        LocalBroadcastManager.getInstance(this).registerReceiver(streamingControlReceiver, IntentFilter("streaming-control"))
+        LocalBroadcastManager.getInstance(this).registerReceiver(recordingControlReceiver, IntentFilter("recording-control"))
+
+        val serverConnectionFilter = IntentFilter(StatusReportingManager.ACTION_SERVER_DISCONNECTED)
+        LocalBroadcastManager.getInstance(this).registerReceiver(serverConnectionReceiver, serverConnectionFilter)
+    }
+
+    private fun unregisterReceivers() {
+        try {
+            LocalBroadcastManager.getInstance(this).unregisterReceiver(streamingControlReceiver)
+            LocalBroadcastManager.getInstance(this).unregisterReceiver(recordingControlReceiver)
+            LocalBroadcastManager.getInstance(this).unregisterReceiver(serverConnectionReceiver)
+            Log.d("MainActivity", "✅ All broadcast receivers unregistered")
+        } catch (e: Exception) {
+            Log.e("MainActivity", "❌ Failed to unregister a receiver", e)
+        }
     }
 }

@@ -99,6 +99,7 @@ class StatusReportingManager(
     private var currentReportInterval: Long = NORMAL_REPORT_INTERVAL
     
     companion object {
+        const val ACTION_SERVER_DISCONNECTED = "ai.fd.thinklet.app.squid.run.SERVER_DISCONNECTED"
         private const val TAG = "StatusReportingManager"
         private const val NORMAL_REPORT_INTERVAL = 5000L  // 5 seconds
         private const val ACTIVE_REPORT_INTERVAL = 5000L   // 5 seconds
@@ -475,6 +476,9 @@ class StatusReportingManager(
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
                 if (t is ConnectException || t is SocketTimeoutException) {
                     Log.e(TAG, "❌ WebSocket: Could not connect to server: ${t.message}")
+                    // Broadcast that the server is disconnected
+                    val intent = Intent(ACTION_SERVER_DISCONNECTED)
+                    LocalBroadcastManager.getInstance(context).sendBroadcast(intent)
                 } else {
                     Log.e(TAG, "❌ WebSocket connection failed", t)
                 }

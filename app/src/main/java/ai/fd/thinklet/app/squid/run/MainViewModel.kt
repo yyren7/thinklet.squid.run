@@ -67,16 +67,30 @@ class MainViewModel(
     private val angle: Angle by lazy(LazyThreadSafetyMode.NONE, ::Angle)
 
     /**
-     * The server IP address for RTMP streaming.
+     * The server IP address for streaming.
      */
     private val _serverIp = MutableStateFlow<String?>(null)
     val serverIp: StateFlow<String?> = _serverIp.asStateFlow()
 
     /**
-     * The complete RTMP stream URL, dynamically generated from server IP.
+     * Streaming protocol (rtmp or srt)
      */
-    val streamUrl: StateFlow<String> = _serverIp.map { ip ->
-        "rtmp://$ip:1935/thinklet.squid.run"
+    private val _streamProtocol = MutableStateFlow<String>("rtmp")
+    val streamProtocol: StateFlow<String> = _streamProtocol.asStateFlow()
+
+    /**
+     * The complete stream URL, dynamically generated from server IP and protocol.
+     * RTMP: rtmp://ip:1935/thinklet.squid.run
+     * SRT: srt://ip:8890
+     */
+    val streamUrl: StateFlow<String> = kotlinx.coroutines.flow.combine(
+        _serverIp,
+        _streamProtocol
+    ) { ip, protocol ->
+        when (protocol) {
+            "srt" -> "srt://$ip:8890"
+            else -> "rtmp://$ip:1935/thinklet.squid.run"
+        }
     }.stateIn(viewModelScope, SharingStarted.Eagerly, "")
 
     /**
@@ -95,18 +109,42 @@ class MainViewModel(
         _serverIp.value = sharedPreferences.getString("serverIp", null)
             ?: savedIp
             ?: defaultIp
+        
+        // Load protocol preference (default to rtmp for backward compatibility)
+        _streamProtocol.value = sharedPreferences.getString("streamProtocol", "srt") ?: "srt"
     }
 
     /**
-     * Extract IP address from RTMP URL.
-     * Format: rtmp://IP:PORT/PATH
+     * Extract IP address from stream URL.
+     * Format: rtmp://IP:PORT/PATH or srt://IP:PORT
      */
     private fun extractIpFromUrl(url: String): String? {
         return try {
-            val pattern = "rtmp://([^:]+):".toRegex()
-            pattern.find(url)?.groupValues?.get(1)
+            val pattern = "(rtmp|srt)://([^:]+):".toRegex()
+            pattern.find(url)?.groupValues?.get(2)
         } catch (e: Exception) {
             null
+        }
+    }
+    
+    /**
+     * Update streaming protocol (rtmp or srt)
+     */
+    fun updateStreamProtocol(protocol: String) {
+        if (protocol != "rtmp" && protocol != "srt") {
+            Log.w("MainViewModel", "Invalid protocol: $protocol, using rtmp")
+            return
+        }
+        
+        if (_streamProtocol.value == protocol) return
+        
+        _streamProtocol.value = protocol
+        sharedPreferences.edit().putString("streamProtocol", protocol).apply()
+        
+        // If streaming is active, stop it
+        if (_isStreaming.value || _connectionStatus.value == ConnectionStatus.CONNECTING) {
+            Log.i("MainViewModel", "Protocol changed to $protocol, stopping current stream")
+            stopStreaming()
         }
     }
 
@@ -225,8 +263,9 @@ class MainViewModel(
     private var consecutiveZeroBitrateCount = 0
     @Volatile
     private var lastBitrateWarningTime = 0L
-    private val ZERO_BITRATE_WARNING_THRESHOLD = 5  // Warn after 5 consecutive zeros
-    private val WARNING_COOLDOWN_MS = 10000L  // Only warn once every 10 seconds
+    private val ZERO_BITRATE_WARNING_THRESHOLD = 3  // Warn after 3 consecutive zeros (~3 seconds)
+    private val ZERO_BITRATE_AUTO_STOP_THRESHOLD = 10  // Auto-stop after 10 consecutive zeros (~10 seconds)
+    private val WARNING_COOLDOWN_MS = 5000L  // Only warn once every 5 seconds
 
 
     init {
@@ -472,7 +511,26 @@ class MainViewModel(
         
         // Try to start streaming with error handling for network issues
         return try {
-            streamSnapshot.startStream("$currentStreamUrl/$currentStreamKey")
+            // Build stream URL based on protocol
+            val fullStreamUrl = if (_streamProtocol.value == "srt") {
+                // SRT format: srt://ip:port?streamid=publish:path/key
+                // MediaMTX requires streamid format: action:pathname where action is 'publish' or 'read'
+
+                //
+                // Optimal SRT parameters for industrial weak network environments
+                // latency: (ms) Increased latency to allow more time for retransmission, crucial for reliability. 2-3 times the RTT is recommended.
+                // maxbw: (bytes/s) Maximum bandwidth limit, set slightly above the total bitrate to prevent network congestion.
+                // smoother: Transmission smoothing algorithm to prevent data bursts.
+                //
+                val totalBitrateBps = videoBitrateBps + audioBitrateBps
+                val maxBwBytesPerSecond = (totalBitrateBps * 1.25 / 8).toLong() // Set maxbw to 125% of total bitrate, converted to bytes/s
+
+                "$currentStreamUrl?streamid=publish:thinklet.squid.run/$currentStreamKey&latency=3000&maxbw=$maxBwBytesPerSecond&smoother=live"
+            } else {
+                // RTMP format: rtmp://ip:port/path/key
+                "$currentStreamUrl/$currentStreamKey"
+            }
+            streamSnapshot.startStream(fullStreamUrl)
             true
         } catch (e: CancellationException) {
             // Network selector closed or cancelled - this can happen on first connection after WiFi connects
@@ -1153,6 +1211,7 @@ class MainViewModel(
     internal fun onZeroBitrateDetected() {
         consecutiveZeroBitrateCount++
         
+        // First threshold: Warning only
         if (consecutiveZeroBitrateCount >= ZERO_BITRATE_WARNING_THRESHOLD) {
             val currentTime = System.currentTimeMillis()
             if (currentTime - lastBitrateWarningTime >= WARNING_COOLDOWN_MS) {
@@ -1166,6 +1225,23 @@ class MainViewModel(
                     StreamingEvent("⚠️ Streaming issue: $diagnosis")
                 )
             }
+        }
+        
+        // Second threshold: Auto-stop to prevent wasting resources
+        if (consecutiveZeroBitrateCount >= ZERO_BITRATE_AUTO_STOP_THRESHOLD) {
+            Log.e("MainViewModel", "❌ Zero bitrate persisted for $consecutiveZeroBitrateCount reports. Auto-stopping stream to save resources.")
+            
+            streamingEventMutableSharedFlow.tryEmit(
+                StreamingEvent("❌ Stream auto-stopped: No data transmitted for ${consecutiveZeroBitrateCount} seconds. Please check camera and network.")
+            )
+            
+            // Stop streaming to save resources and allow recovery
+            viewModelScope.launch(Dispatchers.Main) {
+                stopStreaming()
+            }
+            
+            // Reset counter to prevent repeated stops
+            consecutiveZeroBitrateCount = 0
         }
     }
     
