@@ -147,6 +147,8 @@ class MainActivity : AppCompatActivity() {
 
         binding.dimension.text =
             getString(R.string.dimension_text, viewModel.width, viewModel.height)
+        binding.recordDimension.text =
+            getString(R.string.dimension_text, viewModel.recordVideoWidth, viewModel.recordVideoHeight)
         binding.videoBitrate.text = (viewModel.videoBitrateBps / 1024).toString()
         binding.samplingRate.text = (viewModel.audioSampleRateHz / 1000f).toString()
         binding.audioBitrate.text = (viewModel.audioBitrateBps / 1024).toString()

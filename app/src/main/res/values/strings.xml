@@ -7,6 +7,7 @@
     <string name="device_id_source_text">Source: %1$s</string>
     <string name="label_stream_key">Stream Key</string>
     <string name="label_dimension">Dimension</string>
+    <string name="label_record_dimension">Record Dimension</string>
     <string name="label_video_bitrate">Video Bitrate(kbps)</string>
     <string name="label_sampling_rate">Audio Sampling Rate (kHz): </string>
     <string name="label_audio_bitrate">Audio Bitrate (kbps): </string>

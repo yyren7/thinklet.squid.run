@@ -140,6 +140,20 @@
                         tools:text="(w)1920 x (h)1080" />
 
                     <TextView
+                        android:id="@+id/label_record_dimension"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="@string/label_record_dimension"
+                        android:textAppearance="@style/TextAppearance.MaterialComponents.Subtitle2"
+                        android:layout_marginTop="8dp"/>
+
+                    <TextView
+                        android:id="@+id/record_dimension"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        tools:text="(w)1920 x (h)1080" />
+
+                    <TextView
                         android:id="@+id/label_video_bitrate"
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"

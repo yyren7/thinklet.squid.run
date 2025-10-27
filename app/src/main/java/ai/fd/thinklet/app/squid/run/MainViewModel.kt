@@ -316,21 +316,30 @@ class MainViewModel(
 
             // ================= Refactored Video Setup Logic =================
             // 统一处理视频旋转和尺寸，解决代码分散问题
-            val (videoWidth, videoHeight, rotation) = when (statusReportingManager.deviceType) {
+            val (videoWidth, videoHeight, rotation, finalRecordWidth, finalRecordHeight) = when (statusReportingManager.deviceType) {
                 DeviceType.PORTRAIT -> {
                     // P-series (纵向设备): 设置旋转滤镜和参数
                     val rotationFilter = RotationFilterRender()
                     rotationFilter.setRotation(90)
                     localStream.getGlInterface().setFilter(rotationFilter)
-                    // 返回尺寸和旋转角度
-                    Triple(shortSide, longSide, 90)
+                    // 返回尺寸和旋转角度，同时处理录制流的尺寸转换
+                    // 对于纵向设备，录制流也需要交换宽高
+                    val recordW = recordVideoHeight  // 交换：使用原来的高作为宽
+                    val recordH = recordVideoWidth   // 交换：使用原来的宽作为高
+                    Quintuple(shortSide, longSide, 90, recordW, recordH)
                 }
                 DeviceType.LANDSCAPE -> {
                     // M-series (横向设备): 使用原有的逻辑
-                    Triple(longSide, shortSide, getDeviceRotation())
+                    Quintuple(longSide, shortSide, getDeviceRotation(), recordVideoWidth, recordVideoHeight)
                 }
             }
             // =================================================================
+            
+            // 添加详细日志，帮助调试尺寸转换
+            Log.i("MainViewModel", "Video preparation - Device: ${statusReportingManager.deviceType}")
+            Log.i("MainViewModel", "Streaming dimensions: ${videoWidth}x${videoHeight}")
+            Log.i("MainViewModel", "Recording dimensions: ${finalRecordWidth}x${finalRecordHeight}")
+            Log.i("MainViewModel", "Original record config: ${recordVideoWidth}x${recordVideoHeight}")
 
             val isPrepared = try {
                 val isVideoPrepared = localStream.prepareVideo(
@@ -339,8 +348,8 @@ class MainViewModel(
                     fps = videoFps,
                     bitrate = videoBitrateBps,
                     rotation = rotation,
-                    recordWidth = recordVideoWidth,
-                    recordHeight = recordVideoHeight,
+                    recordWidth = finalRecordWidth,
+                    recordHeight = finalRecordHeight,
                     recordBitrate = recordBitrateBps
                 )
                 val isAudioPrepared = localStream.prepareAudio(
@@ -900,6 +909,17 @@ class MainViewModel(
     private data class StreamingEvent(
         val message: String,
         val timestamp: LocalDateTime = LocalDateTime.now()
+    )
+    
+    /**
+     * Data class to hold five values (used for video configuration)
+     */
+    private data class Quintuple<out A, out B, out C, out D, out E>(
+        val first: A,
+        val second: B,
+        val third: C,
+        val fourth: D,
+        val fifth: E
     )
 
     enum class ConnectionStatus {
