@@ -21,7 +21,7 @@ android {
         viewBinding = true
     }
 
-    // 配置 packaging 选项以支持 16 KB 页面大小
+    // Configure packaging options to support 16 KB page size
     packaging {
         jniLibs {
             useLegacyPackaging = false

@@ -315,27 +315,27 @@ class MainViewModel(
             }
 
             // ================= Refactored Video Setup Logic =================
-            // 统一处理视频旋转和尺寸，解决代码分散问题
+            // Unify video rotation and dimension handling to resolve scattered code issues.
             val (videoWidth, videoHeight, rotation, finalRecordWidth, finalRecordHeight) = when (statusReportingManager.deviceType) {
                 DeviceType.PORTRAIT -> {
-                    // P-series (纵向设备): 设置旋转滤镜和参数
+                    // P-series (Portrait device): Set rotation filter and parameters.
                     val rotationFilter = RotationFilterRender()
                     rotationFilter.setRotation(90)
                     localStream.getGlInterface().setFilter(rotationFilter)
-                    // 返回尺寸和旋转角度，同时处理录制流的尺寸转换
-                    // 对于纵向设备，录制流也需要交换宽高
-                    val recordW = recordVideoHeight  // 交换：使用原来的高作为宽
-                    val recordH = recordVideoWidth   // 交换：使用原来的宽作为高
+                    // Return dimensions and rotation angle, also handle recording stream dimension conversion.
+                    // For portrait devices, the recording stream also needs to swap width and height.
+                    val recordW = recordVideoHeight  // Swap: use original height as width
+                    val recordH = recordVideoWidth   // Swap: use original width as height
                     Quintuple(shortSide, longSide, 90, recordW, recordH)
                 }
                 DeviceType.LANDSCAPE -> {
-                    // M-series (横向设备): 使用原有的逻辑
+                    // M-series (Landscape device): Use the original logic.
                     Quintuple(longSide, shortSide, getDeviceRotation(), recordVideoWidth, recordVideoHeight)
                 }
             }
             // =================================================================
             
-            // 添加详细日志，帮助调试尺寸转换
+            // Add detailed logs to help debug dimension conversion.
             Log.i("MainViewModel", "Video preparation - Device: ${statusReportingManager.deviceType}")
             Log.i("MainViewModel", "Streaming dimensions: ${videoWidth}x${videoHeight}")
             Log.i("MainViewModel", "Recording dimensions: ${finalRecordWidth}x${finalRecordHeight}")
@@ -421,14 +421,14 @@ class MainViewModel(
     }
 
     fun activityOnPause() {
-        // 根据用户要求，即使在暂停时也保持所有资源，因为这是单用途设备。
+        // As per user requirement, keep all resources active even when paused, as this is a single-purpose device.
         Log.i("MainViewModel", "Activity pausing, but keeping all resources active as per requirement.")
     }
 
     fun activityOnResume() {
-        // 如果正在录制或推流，它们的资源一直保持着，不需要恢复
-        // 预览会由 SurfaceHolder.Callback 自动恢复，
-        // 它会调用 maybePrepareStreaming -> startPreview
+        // If recording or streaming, their resources are always kept, no need to restore.
+        // The preview will be automatically restored by SurfaceHolder.Callback,
+        // which will call maybePrepareStreaming -> startPreview.
     }
 
     /**
@@ -673,7 +673,7 @@ class MainViewModel(
             return true
         }
 
-        // ⚠️ LED控制已移至回调中，确保与实际录像状态同步
+        // ⚠️ LED control has been moved to the callback to ensure synchronization with the actual recording state.
         // LED will be started in RecordController.Status.STARTED callback
 
         try {
@@ -703,7 +703,7 @@ class MainViewModel(
                                 Log.i("MainViewModel", "✅ Recording STARTED successfully")
                                 _isRecording.value = true
                                 
-                                // ✅ 在录像真正开始后才启动LED闪烁
+                                // ✅ Start LED blinking only after recording has actually started.
                                 ledController.startLedBlinking()
                                 Log.d("MainViewModel", "💡 LED blinking started")
                                 
@@ -727,24 +727,24 @@ class MainViewModel(
                                     StreamingEvent("Recording stopped: $recordPath")
                                 )
                                 
-                                // 在录制停止后计算并保存 MD5
-                                // 关键：延迟执行，确保底层 MediaMuxer 完全将数据刷新到磁盘
+                                // Calculate and save MD5 after recording stops.
+                                // Crucial: Delay execution to ensure the underlying MediaMuxer has fully flushed data to disk.
                                 viewModelScope.launch(Dispatchers.IO) {
                                     try {
-                                        // 等待 1 秒，确保文件完全写入磁盘
-                                        // MediaMuxer 和文件系统可能需要时间来完成最后的写入操作
+                                        // Wait for 1 second to ensure the file is completely written to disk.
+                                        // MediaMuxer and the file system may need time to complete the final write operations.
                                         delay(1000)
                                         
-                                        // 验证文件是否存在且大小合理
+                                        // Verify that the file exists and has a reasonable size.
                                         if (!recordFile.exists()) {
                                             Log.e("MainViewModel", "Recording file does not exist: ${recordFile.name}")
                                             return@launch
                                         }
                                         
                                         val fileSize = recordFile.length()
-                                        if (fileSize < 1024) { // 文件小于 1KB，可能有问题
+                                        if (fileSize < 1024) { // File is smaller than 1KB, likely problematic.
                                             Log.w("MainViewModel", "Recording file size is too small (${fileSize} bytes): ${recordFile.name}")
-                                            // 即使文件很小，也继续计算 MD5，但记录警告
+                                            // Continue calculating MD5 even if the file is small, but log a warning.
                                         }
                                         
                                         Log.i("MainViewModel", "Starting MD5 calculation for file: ${recordFile.name} (${fileSize} bytes)")
@@ -832,10 +832,10 @@ class MainViewModel(
             Log.i("MainViewModel", "🛑 Stopping recording...")
             streamSnapshot.stopRecord()
             // The status will be updated in the callback.
-            // 延迟检查相机资源释放，给录制停止回调足够的时间来完成 MD5 计算
+            // Delay checking for camera resource release to give the recording stop callback enough time to complete MD5 calculation.
             viewModelScope.launch {
-                // 等待更长时间，确保 MD5 计算完成
-                delay(2000) // 等待 2 秒：100ms 状态更新 + 1000ms MD5 延迟 + 额外缓冲
+                // Wait longer to ensure MD5 calculation is complete.
+                delay(2000) // Wait 2 seconds: 100ms for status update + 1000ms for MD5 delay + extra buffer
                 checkAndReleaseCamera()
             }
             onResult?.invoke(true)
@@ -978,34 +978,34 @@ class MainViewModel(
 
     /**
      * Completely release camera and encoder resources.
-     * 这个方法可以在主线程调用，但耗时操作会在后台线程执行
+     * This method can be called on the main thread, but time-consuming operations will be executed on a background thread.
      */
     private fun releaseCamera() {
         val localStream = stream ?: return
         
-        // 立即将 stream 设为 null，防止重复释放（必须在启动协程前完成）
+        // Immediately set stream to null to prevent repeated releases (must be done before starting the coroutine).
         stream = null
         _isPrepared.value = false
         _isPreviewActive.value = false
         
         Log.i("MainViewModel", "Starting camera release process")
         
-        // 在后台线程执行资源释放，避免阻塞主线程
+        // Execute resource release on a background thread to avoid blocking the main thread.
         viewModelScope.launch(Dispatchers.IO) {
             try {
-                // 1. 首先停止录制（最关键，必须确保文件正确关闭）
+                // 1. Stop recording first (most critical, must ensure the file is closed correctly).
                 if (localStream.isRecording) {
                     try {
                         Log.i("MainViewModel", "Stopping recording before releasing camera")
                         localStream.stopRecord()
-                        // 等待录制完全停止，给文件系统时间释放锁
+                        // Wait for recording to fully stop, giving the file system time to release the lock.
                         delay(200)
                     } catch (e: Exception) {
                         Log.e("MainViewModel", "Failed to stop recording, but will continue cleanup", e)
                     }
                 }
                 
-                // 2. 停止推流
+                // 2. Stop streaming.
                 if (localStream.isStreaming) {
                     try {
                         localStream.stopStream()
@@ -1014,7 +1014,7 @@ class MainViewModel(
                     }
                 }
                 
-                // 3. 停止预览
+                // 3. Stop preview.
                 if (localStream.isOnPreview) {
                     try {
                         localStream.stopPreview()
@@ -1023,7 +1023,7 @@ class MainViewModel(
                     }
                 }
                 
-                // 4. 最后释放资源
+                // 4. Finally, release resources.
                 try {
                     localStream.release()
                     streamingEventMutableSharedFlow.tryEmit(
@@ -1078,11 +1078,11 @@ class MainViewModel(
     // }
 
     /**
-     * 当 ViewModel 被销毁时调用（应用完全退出时）
-     * 确保正在进行的录制被安全停止
+     * Called when the ViewModel is destroyed (when the application exits completely).
+     * Ensures that any ongoing recording is safely stopped.
      * 
-     * 注意：这个方法在主线程同步执行，但我们需要给录制足够时间停止
-     * 使用 runBlocking 在 IO 线程执行，避免阻塞主线程的其他操作
+     * Note: This method executes synchronously on the main thread, but we need to give recording enough time to stop.
+     * Use runBlocking on an IO thread to avoid blocking other main thread operations.
      */
     override fun onCleared() {
         super.onCleared()

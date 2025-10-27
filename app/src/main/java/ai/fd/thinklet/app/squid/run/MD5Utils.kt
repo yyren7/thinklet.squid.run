@@ -8,8 +8,8 @@ import java.io.FileInputStream
 import java.security.MessageDigest
 
 /**
- * MD5 工具类
- * 用于计算文件的 MD5 值
+ * MD5 Utility Class
+ * Used to calculate the MD5 hash of files.
  */
 object MD5Utils {
     
@@ -17,9 +17,9 @@ object MD5Utils {
     private const val CHUNK_SIZE = 8192 // 8KB chunks to reduce memory usage
     
     /**
-     * 计算文件的 MD5 值
-     * @param file 要计算 MD5 的文件
-     * @return MD5 字符串，如果计算失败返回空字符串
+     * Calculates the MD5 hash of a file.
+     * @param file The file for which to calculate the MD5.
+     * @return The MD5 string, or an empty string if the calculation fails.
      */
     fun calculateFileMD5(file: File): String {
         return try {
@@ -44,9 +44,9 @@ object MD5Utils {
     }
     
     /**
-     * 计算文件的 MD5 并保存为 .md5 文件
-     * @param file 要计算 MD5 的文件
-     * @return 是否成功保存 MD5 文件
+     * Calculates the MD5 of a file and saves it to a .md5 file.
+     * @param file The file for which to calculate the MD5.
+     * @return True if the MD5 file was saved successfully, false otherwise.
      */
     fun calculateAndSaveMD5(file: File): Boolean {
         val md5 = calculateFileMD5(file)
@@ -66,9 +66,9 @@ object MD5Utils {
     }
     
     /**
-     * 读取已缓存的 MD5 值（同步版本）
-     * @param file 视频文件
-     * @return MD5 字符串，如果读取失败返回空字符串
+     * Reads a cached MD5 value (synchronous version).
+     * @param file The video file.
+     * @return The MD5 string, or an empty string if reading fails.
      */
     fun readMD5FromFile(file: File): String {
         val md5File = File(file.parent, "${file.name}.md5")
@@ -92,9 +92,9 @@ object MD5Utils {
     }
     
     /**
-     * 读取已缓存的 MD5 值（异步版本，用于协程）
-     * @param file 视频文件
-     * @return MD5 字符串，如果读取失败返回空字符串
+     * Reads a cached MD5 value (asynchronous version, for coroutines).
+     * @param file The video file.
+     * @return The MD5 string, or an empty string if reading fails.
      */
     suspend fun readMD5FromFileAsync(file: File): String = withContext(Dispatchers.IO) {
         readMD5FromFile(file)

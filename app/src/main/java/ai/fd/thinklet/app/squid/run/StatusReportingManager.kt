@@ -32,8 +32,8 @@ import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.flow
 
 enum class DeviceType {
-    LANDSCAPE, // 横向设备 (M开头)
-    PORTRAIT   // 纵向设备 (P开头)
+    LANDSCAPE, // Landscape device (starts with M)
+    PORTRAIT   // Portrait device (starts with P)
 }
 
 data class DeviceStatus(
@@ -80,13 +80,13 @@ class StatusReportingManager(
     val deviceIdSource: String
     val deviceType: DeviceType
 
-    // File transfer server - 完全从属于 StatusReportingManager
-    // 只能通过 start() 和 stop() 方法来控制生命周期
+    // File transfer server - completely subordinate to StatusReportingManager
+    // Its lifecycle can only be controlled by the start() and stop() methods
     private val fileTransferServer: FileTransferServer by lazy {
         FileTransferServer(context, port = 8889)
     }
-    private var fileServerEnabled = false  // 文件服务器是否成功启动
-    private var fileServerInitialized = false  // 文件服务器是否已经初始化过
+    private var fileServerEnabled = false  // Whether the file server was successfully started
+    private var fileServerInitialized = false  // Whether the file server has been initialized
 
     @Volatile
     private var isStarted = false
@@ -120,7 +120,7 @@ class StatusReportingManager(
         this.deviceIdSource = source
         this.deviceType = when {
             id.startsWith("P", ignoreCase = true) -> DeviceType.PORTRAIT
-            else -> DeviceType.LANDSCAPE // M开头或其他情况，默认为横向
+            else -> DeviceType.LANDSCAPE // Starts with M or other cases, defaults to landscape
         }
         // Start listening to network state changes
         GlobalScope.launch {
@@ -265,8 +265,8 @@ class StatusReportingManager(
     }
 
     /**
-     * 启动 StatusReportingManager
-     * 文件传输服务器会随之启动，两者生命周期绑定
+     * Starts the StatusReportingManager.
+     * The file transfer server will start with it, and their lifecycles are bound.
      */
     fun start() {
         if (isStarted) {
@@ -277,10 +277,10 @@ class StatusReportingManager(
         Log.i(TAG, "🚀 Starting StatusReportingManager...")
         isStarted = true
         
-        // 1. 启动文件传输服务器（必须先启动，确保状态报告时服务已就绪）
+        // 1. Start the file transfer server (must be started first to ensure the service is ready for status reporting).
         startFileTransferServer()
         
-        // 2. 注册电源状态监听
+        // 2. Register for power state listening.
         val intentFilter = IntentFilter().apply {
             addAction(Intent.ACTION_POWER_CONNECTED)
             addAction(Intent.ACTION_POWER_DISCONNECTED)
@@ -288,18 +288,18 @@ class StatusReportingManager(
         context.registerReceiver(powerConnectionReceiver, intentFilter)
         isReceiverRegistered = true
         
-        // 3. 建立 WebSocket 连接
+        // 3. Establish WebSocket connection.
         connect()
         
         Log.i(TAG, "✅ StatusReportingManager started (fileServer: $fileServerEnabled)")
     }
     
     /**
-     * 启动文件传输服务器
-     * 只能由 start() 方法调用，确保生命周期一致
+     * Starts the file transfer server.
+     * Can only be called by the start() method to ensure consistent lifecycle.
      */
     private fun startFileTransferServer() {
-        // 如果已经初始化并启用，说明服务器正在运行，无需重复启动
+        // If already initialized and enabled, the server is running, no need to start again.
         if (fileServerInitialized && fileServerEnabled) {
             Log.d(TAG, "📁 File transfer server is already running on port 8889")
             return
@@ -315,23 +315,23 @@ class StatusReportingManager(
             Log.e(TAG, "❌ Failed to start file transfer server on port 8889", e)
             fileServerEnabled = false
             fileServerInitialized = false
-            // 不抛出异常，允许 StatusReportingManager 继续运行（只是文件传输功能不可用）
+            // Do not throw an exception, allow StatusReportingManager to continue running (file transfer will be unavailable).
         }
     }
     
     /**
-     * 停止文件传输服务器
-     * 只能由 stop() 方法调用，确保生命周期一致
-     * 同步等待服务器完全停止并释放端口
+     * Stops the file transfer server.
+     * Can only be called by the stop() method to ensure consistent lifecycle.
+     * Waits synchronously for the server to fully stop and release the port.
      */
     private fun stopFileTransferServer() {
-        // 如果服务器从未启动，直接返回
+        // If the server was never started, return directly.
         if (!fileServerInitialized) {
             Log.d(TAG, "📁 File transfer server was never started, skipping stop")
             return
         }
         
-        // 如果服务器已经停止，避免重复操作
+        // If the server is already stopped, avoid repeated operations.
         if (!fileServerEnabled) {
             Log.d(TAG, "📁 File transfer server is already stopped")
             return
@@ -342,20 +342,20 @@ class StatusReportingManager(
             fileTransferServer.stopServer()
             fileServerEnabled = false
             
-            // 等待一段时间确保端口完全释放
+            // Wait a moment to ensure the port is fully released.
             Thread.sleep(500)
             Log.i(TAG, "✅ File transfer server stopped and port 8889 released")
         } catch (e: Exception) {
             Log.e(TAG, "❌ Failed to stop file transfer server", e)
-            // 即使停止失败，也标记为未启用，避免状态不一致
+            // Even if stopping fails, mark as not enabled to avoid inconsistent state.
             fileServerEnabled = false
         }
     }
 
     /**
-     * 停止 StatusReportingManager
-     * 文件传输服务器会随之停止，两者生命周期绑定
-     * 同步等待所有资源释放完毕
+     * Stops the StatusReportingManager.
+     * The file transfer server will stop with it, and their lifecycles are bound.
+     * Waits synchronously for all resources to be released.
      */
     fun stop() {
         if (!isStarted) {
@@ -366,7 +366,7 @@ class StatusReportingManager(
         Log.i(TAG, "🛑 Stopping StatusReportingManager...")
         isStarted = false
         
-        // 1. 取消所有定时器
+        // 1. Cancel all timers.
         try {
             reportTimer?.cancel()
             reportTimer?.purge()
@@ -377,12 +377,12 @@ class StatusReportingManager(
             Log.e(TAG, "❌ Failed to cancel timers", e)
         }
         
-        // 2. 关闭 WebSocket 连接
+        // 2. Close the WebSocket connection.
         try {
             val ws = webSocket
             if (ws != null) {
                 ws.close(1000, "StatusReportingManager stopped")
-                // 等待 WebSocket 完全关闭
+                // Wait for the WebSocket to fully close.
                 Thread.sleep(300)
                 webSocket = null
                 Log.d(TAG, "✅ WebSocket closed")
@@ -391,10 +391,10 @@ class StatusReportingManager(
             Log.e(TAG, "❌ Failed to close WebSocket", e)
         }
         
-        // 3. 停止文件传输服务器（关键！必须等待端口释放）
+        // 3. Stop the file transfer server (critical! must wait for port release).
         stopFileTransferServer()
         
-        // 4. 注销广播接收器
+        // 4. Unregister the broadcast receiver.
         if (isReceiverRegistered) {
             try {
                 context.unregisterReceiver(powerConnectionReceiver)
@@ -451,10 +451,10 @@ class StatusReportingManager(
                 // Reset reconnect attempts on successful connection
                 reconnectAttempts = 0
                 
-                // 立即发送一次设备状态，让PC端知道文件服务器状态
+                // Immediately send device status once to let the PC side know the file server status.
                 sendDeviceStatus()
                 
-                // 然后启动定期报告定时器
+                // Then start the periodic reporting timer.
                 startReportTimer()
             }
 
@@ -500,7 +500,7 @@ class StatusReportingManager(
     private fun maybeReconnect() {
         if (isStarted && networkManager.isConnected.value) {
             reconnectAttempts++
-            // 限制重连次数，避免左移操作溢出（最多 1 shl 6 = 64 倍延迟）
+            // Limit reconnect attempts to prevent overflow from left shift operation (max 1 shl 6 = 64x delay).
             val safeAttempts = reconnectAttempts.coerceAtMost(7)
             val delay = (INITIAL_RECONNECT_DELAY * (1 shl (safeAttempts - 1))).coerceAtMost(MAX_RECONNECT_DELAY)
             val jitter = (Math.random() * RECONNECT_JITTER).toLong()
@@ -615,8 +615,8 @@ class StatusReportingManager(
     }
 
     /**
-     * 获取设备状态
-     * 包含文件服务器的完整状态信息，所有信息从 StatusReportingManager 统一获取
+     * Gets the device status.
+     * Includes complete status information for the file server, all information is obtained uniformly from StatusReportingManager.
      */
     private fun getDeviceStatus(): DeviceStatus {
         val batteryStatus: Intent? = IntentFilter(Intent.ACTION_BATTERY_CHANGED).let { ifilter ->
@@ -645,8 +645,8 @@ class StatusReportingManager(
             streamKey = this.streamKey,
             isRecording = this.isRecording,
             recordingDurationMs = this.recordingDurationMs,
-            fileServerPort = 8889,  // 文件服务器端口（固定）
-            fileServerEnabled = this.fileServerEnabled  // 文件服务器状态（由 StatusReportingManager 管理）
+            fileServerPort = 8889,  // File server port (fixed)
+            fileServerEnabled = this.fileServerEnabled  // File server status (managed by StatusReportingManager)
         )
     }
 

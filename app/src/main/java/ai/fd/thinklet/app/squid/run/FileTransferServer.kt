@@ -52,7 +52,7 @@ class FileTransferServer(
                 else -> newFixedLengthResponse(Response.Status.NOT_FOUND, MIME_PLAINTEXT, "Not Found")
             }
         } catch (e: java.net.SocketException) {
-            // 客户端断开连接（如超时），这是正常情况，只记录警告
+            // Client disconnected (e.g., timeout), this is a normal situation, log a warning only.
             Log.w(TAG, "Client disconnected: ${e.message} (This is usually due to client timeout)")
             newFixedLengthResponse(
                 Response.Status.INTERNAL_ERROR,
@@ -73,14 +73,14 @@ class FileTransferServer(
      * Get the file list.
      * API: GET /files
      * Response: [{"name": "xxx.mp4", "size": 12345, "lastModified": 1234567890, "md5": "abc123..."}]
-     * 只返回存在同名 .md5 文件的视频文件
+     * Only returns video files that have a corresponding .md5 file.
      * 
-     * 性能优化：使用协程并行读取多个MD5文件
+     * Performance optimization: Use coroutines to read multiple MD5 files in parallel.
      */
     private fun handleFileList(): Response {
         val startTime = System.currentTimeMillis()
         
-        // 第一步：筛选出所有有效的 .mp4 文件（存在对应的 .md5 文件）
+        // Step 1: Filter all valid .mp4 files (those with a corresponding .md5 file).
         val validFiles = recordFolder.listFiles { file ->
             if (!file.isFile || !file.name.endsWith(".mp4")) {
                 return@listFiles false
@@ -92,11 +92,11 @@ class FileTransferServer(
         val filterTime = System.currentTimeMillis()
         Log.d(TAG, "File filtering complete: ${validFiles.size} files, took ${filterTime - startTime}ms")
         
-        // 第二步：使用协程并行读取所有 MD5 文件
+        // Step 2: Use coroutines to read all MD5 files in parallel.
         val files = runBlocking(Dispatchers.IO) {
             validFiles.map { file ->
                 async {
-                    // 并行读取 MD5
+                    // Read MD5 in parallel
                     val md5 = MD5Utils.readMD5FromFileAsync(file)
                     if (md5.isEmpty()) {
                         Log.w(TAG, "MD5 file exists but invalid for: ${file.name}")
@@ -122,8 +122,8 @@ class FileTransferServer(
             gson.toJson(files)
         )
         
-        // 保留 GZIP 压缩以减少网络传输数据量
-        // NanoHTTPD 会根据客户端的 Accept-Encoding 头自动决定是否压缩
+        // Keep GZIP compression to reduce network traffic.
+        // NanoHTTPD automatically decides whether to compress based on the client's Accept-Encoding header.
         response.addHeader("Access-Control-Allow-Origin", "*")
         
         return response
@@ -297,17 +297,17 @@ class FileTransferServer(
 
     /**
      * Stop the server.
-     * 同步等待服务器完全停止并释放端口
+     * Waits synchronously for the server to fully stop and release the port.
      */
     fun stopServer() {
         try {
             Log.i(TAG, "🛑 Stopping file transfer server on port $listeningPort...")
             
-            // NanoHTTPD.stop() 会关闭服务器 socket 并停止接受新连接
+            // NanoHTTPD.stop() closes the server socket and stops accepting new connections.
             stop()
             
-            // 等待一段时间确保所有连接都关闭，端口被释放
-            // NanoHTTPD 的 stop() 是异步的，需要给它时间完成清理
+            // Wait a moment to ensure all connections are closed and the port is released.
+            // NanoHTTPD's stop() is asynchronous, so it needs time to complete cleanup.
             Thread.sleep(200)
             
             Log.i(TAG, "✅ File transfer server stopped, port $listeningPort released")

@@ -43,7 +43,7 @@ class SquidRunApplication : Application(), ViewModelStoreOwner {
         // We can trigger the creation here if we want it to start immediately with the app.
         statusReportingManager
 
-        // 在 Application 层播报，确保整个应用生命周期只播报一次
+        // Announce at the Application level to ensure it's spoken only once per application lifecycle.
         GlobalScope.launch {
             ttsManager.ttsReady.first { it }
             Log.i("SquidRunApplication", "✅ TTS ready, announcing application prepared")
@@ -61,7 +61,7 @@ class SquidRunApplication : Application(), ViewModelStoreOwner {
         // when the application is terminating.
         statusReportingManager.stop()
         networkManager.unregisterCallback() // Unregister network callback
-        ttsManager.shutdown()  // 调用相同的shutdown方法
+        ttsManager.shutdown()  // Call the same shutdown method
         super.onTerminate()
     }
 }

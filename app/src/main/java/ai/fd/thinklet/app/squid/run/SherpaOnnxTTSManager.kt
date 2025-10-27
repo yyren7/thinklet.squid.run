@@ -17,13 +17,13 @@ import kotlinx.coroutines.flow.asStateFlow
 import java.io.File
 
 /**
- * Sherpa-ONNX TTS Manager - 替代Android原生TTS
- * 
- * 优势：
- * - 离线TTS，无需网络
- * - 无系统依赖，避免Pico TTS崩溃问题
- * - 更快的初始化速度
- * - 更好的音质和自然度
+ * Sherpa-ONNX TTS Manager - A replacement for the native Android TTS.
+ *
+ * Advantages:
+ * - Offline TTS, no network required.
+ * - No system dependencies, avoiding Pico TTS crash issues.
+ * - Faster initialization speed.
+ * - Better sound quality and naturalness.
  */
 class SherpaOnnxTTSManager(private val context: Context) {
     
@@ -42,20 +42,20 @@ class SherpaOnnxTTSManager(private val context: Context) {
     private var isSpeaking = false
     
     init {
-        // Sherpa-ONNX无需开机延迟，可以立即初始化
+        // Sherpa-ONNX does not require a startup delay and can be initialized immediately.
         Log.i(TAG, "🚀 Initializing Sherpa-ONNX TTS...")
         initializeTTS()
     }
     
     private fun initializeTTS() {
         try {
-            // 配置TTS模型路径（需要将模型文件放在assets/tts_models/目录下）
+            // Configure the TTS model path (requires placing model files in the assets/tts_models/ directory).
             val modelDir = copyAssetsToCache()
             
             val config = getOfflineTtsConfig(
                 modelDir = modelDir,
-                modelName = "en_US-lessac-low.onnx",  // 示例模型
-                dataDir = "$modelDir/espeak-ng-data", // 指向 espeak-ng-data 子目录
+                modelName = "en_US-lessac-low.onnx",  // Example model
+                dataDir = "$modelDir/espeak-ng-data", // Point to the espeak-ng-data subdirectory
                 tokens = "tokens.txt",
                 numThreads = 2,
                 lengthScale = 1.0f,
@@ -64,7 +64,7 @@ class SherpaOnnxTTSManager(private val context: Context) {
             
             tts = OfflineTts(null, config)
             
-            // 初始化AudioTrack
+            // Initialize AudioTrack
             val sampleRate = tts!!.sampleRate()
             val bufferSize = AudioTrack.getMinBufferSize(
                 sampleRate,
@@ -99,10 +99,10 @@ class SherpaOnnxTTSManager(private val context: Context) {
     }
     
     /**
-     * 将assets中的模型文件复制到缓存目录
+     * Copies model files from assets to the cache directory.
      */
     private fun copyAssetsToCache(): String {
-        // 使用 filesDir 而不是 cacheDir，重启后仍然保留
+        // Use filesDir instead of cacheDir to keep files after restart.
         val modelDir = File(context.filesDir, "sherpa_tts_models")
 
         val markerFile = File(modelDir, ".copied")
@@ -125,10 +125,10 @@ class SherpaOnnxTTSManager(private val context: Context) {
     }
 
     /**
-     * 复制单个 asset 文件
+     * Copies a single asset file.
      */
     private fun copyAssetFile(assetPath: String, destFile: File) {
-        // 强制覆盖
+        // Force overwrite
         context.assets.open(assetPath).use { input ->
             destFile.outputStream().use { output ->
                 input.copyTo(output)
@@ -137,7 +137,7 @@ class SherpaOnnxTTSManager(private val context: Context) {
     }
 
     /**
-     * 递归复制 asset 文件夹
+     * Recursively copies an asset folder.
      */
     private fun copyAssetFolder(assetDir: String, destDir: File) {
         if (!destDir.exists()) {
@@ -146,7 +146,7 @@ class SherpaOnnxTTSManager(private val context: Context) {
 
         val files = context.assets.list(assetDir)
         if (files.isNullOrEmpty()) {
-            return // 空目录或文件
+            return // Empty directory or file
         }
 
         for (fileName in files) {
@@ -155,13 +155,13 @@ class SherpaOnnxTTSManager(private val context: Context) {
 
             var isDir = false
             try {
-                // 尝试列出子文件/目录，如果成功且不为空，则认为是目录
+                // Try to list sub-files/directories. If successful and not empty, it's a directory.
                 val subFiles = context.assets.list(assetPath)
                 if (subFiles != null && subFiles.isNotEmpty()) {
                     isDir = true
                 }
             } catch (e: java.io.IOException) {
-                // 如果发生IOException，说明它是一个文件而不是目录
+                // If an IOException occurs, it's a file, not a directory.
                 isDir = false
             }
 
@@ -174,7 +174,7 @@ class SherpaOnnxTTSManager(private val context: Context) {
     }
     
     /**
-     * 异步播放文本
+     * Asynchronously plays the text.
      */
     fun speak(
         message: String,
@@ -189,7 +189,7 @@ class SherpaOnnxTTSManager(private val context: Context) {
             stopSpeaking()
         }
         
-        // 在后台线程生成和播放音频
+        // Generate and play audio on a background thread.
         Thread {
             try {
                 isSpeaking = true
@@ -227,7 +227,7 @@ class SherpaOnnxTTSManager(private val context: Context) {
         }
     }
     
-    // ========== 便捷方法（保持与原TTSManager相同的接口） ==========
+    // ========== Convenience methods (maintaining the same interface as the original TTSManager) ==========
     
     fun speakPowerDown() {
         speak("power down")
@@ -252,12 +252,12 @@ class SherpaOnnxTTSManager(private val context: Context) {
             return
         }
 
-        // 使用线程池并行生成音频，然后顺序播放
+        // Use a thread pool to generate audio in parallel, then play sequentially.
         val executor = java.util.concurrent.Executors.newFixedThreadPool(2)
         val audioQueue = java.util.concurrent.LinkedBlockingQueue<FloatArray>()
         val playingFinished = java.util.concurrent.atomic.AtomicBoolean(false)
 
-        // 任务1：生成电池状态语音
+        // Task 1: Generate battery status speech.
         executor.submit {
             try {
                 val batteryPercentage = getBatteryPercentage()
@@ -267,12 +267,12 @@ class SherpaOnnxTTSManager(private val context: Context) {
                 audioQueue.put(audio.samples)
             } catch (e: Exception) {
                 Log.e(TAG, "❌ Failed to generate battery status speech", e)
-                // 即使失败也要放入空数组，以避免阻塞播放线程
+                // Put an empty array even on failure to avoid blocking the playback thread.
                 audioQueue.put(FloatArray(0))
             }
         }
 
-        // 任务2：生成网络状态语音
+        // Task 2: Generate network status speech.
         executor.submit {
             try {
                 val networkStatus = getNetworkStatus()
@@ -286,13 +286,13 @@ class SherpaOnnxTTSManager(private val context: Context) {
             }
         }
 
-        // 任务3：顺序播放生成的语音
+        // Task 3: Sequentially play the generated speech.
         Thread {
             try {
                 isSpeaking = true
                 var audiosPlayed = 0
                 while (audiosPlayed < 2 && !Thread.currentThread().isInterrupted) {
-                    // 从队列中取出音频数据，会阻塞直到有数据为止
+                    // Take audio data from the queue, blocking until data is available.
                     val samples = audioQueue.take()
                     if (samples.isNotEmpty()) {
                         Log.d(TAG, "🎵 Playing audio part ${audiosPlayed + 1} (${samples.size} samples)")
@@ -326,8 +326,8 @@ class SherpaOnnxTTSManager(private val context: Context) {
     }
     
     internal fun getNetworkStatus(): String {
-        // 复用原有的网络状态获取逻辑
-        // 为简化，这里返回简单状态
+        // Reuse the existing network status logic.
+        // For simplicity, returning a simple status here.
         return "connected"
     }
     
@@ -357,7 +357,7 @@ class SherpaOnnxTTSManager(private val context: Context) {
 }
 
 /**
- * 配置Sherpa-ONNX TTS
+ * Configures Sherpa-ONNX TTS.
  */
 private fun getOfflineTtsConfig(
     modelDir: String,
@@ -372,8 +372,8 @@ private fun getOfflineTtsConfig(
         model = OfflineTtsModelConfig(
             vits = OfflineTtsVitsModelConfig(
                 model = "$modelDir/$modelName",
-                lexicon = "",  // Piper 模型留空
-                dataDir = dataDir,  // 设置 dataDir
+                lexicon = "",  // Leave empty for Piper models
+                dataDir = dataDir,  // Set dataDir
                 tokens = "$modelDir/$tokens",
                 lengthScale = lengthScale
             ),

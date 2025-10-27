@@ -297,7 +297,7 @@ class MainActivity : AppCompatActivity() {
     override fun onDestroy() {
         Log.i("MainActivity", "🛑 Activity is being destroyed, cleaning up resources...")
         
-        // 先注销广播接收器，避免在清理过程中收到新的命令
+        // Unregister broadcast receivers first to avoid receiving new commands during cleanup.
         try {
             LocalBroadcastManager.getInstance(this).unregisterReceiver(streamingControlReceiver)
             LocalBroadcastManager.getInstance(this).unregisterReceiver(recordingControlReceiver)
@@ -400,18 +400,18 @@ class MainActivity : AppCompatActivity() {
 
     private fun handlePowerKeyPress() {
         Log.d("PowerKey", "Long press on power button detected. Testing vibration.")
-        // 1. 震动反馈
+        // 1. Vibrator feedback
         val timings = longArrayOf(0, 200, 200, 200)
         val amplitudes = intArrayOf(0, DEFAULT_AMPLITUDE, 0, DEFAULT_AMPLITUDE)
         vibrator.vibrate(VibrationEffect.createWaveform(timings, amplitudes, -1))
 
-        // 2. TTS 语音播报
+        // 2. TTS speech announcement
         ttsManager.speakPowerDown()
 
-        // 3. 发送离线状态并准备关机
+        // 3. Send offline status and prepare for shutdown
         statusReportingManager.sendOfflineStatusAndStop()
 
-        // 4. 执行关机
+        // 4. Execute shutdown
         PowerController().shutdown(this, wait = 1000 /* max wait 1s */)
     }
 
@@ -453,8 +453,8 @@ class MainActivity : AppCompatActivity() {
         override fun onReceive(context: Context?, intent: Intent?) {
             when (intent?.getStringExtra("action")) {
                 "start" -> {
-                    // 移除MainActivity层的检查，统一由ViewModel层处理
-                    // ViewModel的并发保护会处理重复请求的情况
+                    // Remove checks from MainActivity layer, unify handling in ViewModel layer.
+                    // ViewModel's concurrency protection will handle repeated requests.
                     viewModel.startRecording { isRecordingStarted ->
                         if (isRecordingStarted) {
                             vibrator.vibrate(createStaccatoVibrationEffect(1))
@@ -464,13 +464,13 @@ class MainActivity : AppCompatActivity() {
                     }
                 }
                 "stop" -> {
-                    // 移除MainActivity层的检查，统一由ViewModel层处理
-                    // ViewModel会检查状态并记录适当的日志
+                    // Remove checks from MainActivity layer, unify handling in ViewModel layer.
+                    // ViewModel will check the status and log appropriately.
                     viewModel.stopRecording { isStopInitiated ->
                         if (isStopInitiated) {
                             vibrator.vibrate(createStaccatoVibrationEffect(2))
                         } else {
-                            // 停止失败或未在录像中，使用不同的振动反馈
+                            // Use different vibration feedback for stop failure or not recording.
                             vibrator.vibrate(createStaccatoVibrationEffect(3))
                         }
                     }
