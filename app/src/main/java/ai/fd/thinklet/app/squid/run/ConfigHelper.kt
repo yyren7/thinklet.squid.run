@@ -15,7 +15,6 @@ object ConfigHelper {
             "streamKey" to streamKey,
             "longSide" to 1920,
             "shortSide" to 1080,
-            "orientation" to "landscape",
             "videoBitrate" to 8192, // 8Mbps
             "audioSampleRate" to 48000,
             "audioBitrate" to 320, // High-quality audio

@@ -169,8 +169,6 @@ class MainViewModel(
 
     private val longSide: Int = savedState.get<Int>("longSide") ?: DefaultConfig.DEFAULT_LONG_SIDE
     private val shortSide: Int = savedState.get<Int>("shortSide") ?: DefaultConfig.DEFAULT_SHORT_SIDE
-    private val orientation: Orientation? =
-        Orientation.fromArgumentValue(savedState.get<String>("orientation") ?: DefaultConfig.DEFAULT_ORIENTATION)
     val videoBitrateBps: Int =
         savedState.get<Int>("videoBitrate")?.let { it * 1024 } ?: (DefaultConfig.DEFAULT_VIDEO_BITRATE * 1024)
     val videoFps: Int = savedState.get<Int>("videoFps") ?: DefaultConfig.DEFAULT_VIDEO_FPS
@@ -240,11 +238,47 @@ class MainViewModel(
             acc
         }
 
+    /**
+     * Get streaming width based on device type.
+     * For PORTRAIT devices: shortSide x longSide (9:16)
+     * For LANDSCAPE devices: longSide x shortSide (16:9)
+     */
     val width: Int
-        get() = if (angle.isPortrait()) shortSide else longSide
+        get() = when (statusReportingManager.deviceType) {
+            DeviceType.PORTRAIT -> shortSide
+            DeviceType.LANDSCAPE -> longSide
+        }
 
+    /**
+     * Get streaming height based on device type.
+     * For PORTRAIT devices: shortSide x longSide (9:16)
+     * For LANDSCAPE devices: longSide x shortSide (16:9)
+     */
     val height: Int
-        get() = if (angle.isPortrait()) longSide else shortSide
+        get() = when (statusReportingManager.deviceType) {
+            DeviceType.PORTRAIT -> longSide
+            DeviceType.LANDSCAPE -> shortSide
+        }
+
+    /**
+     * Get displayed record video width based on device type.
+     * For PORTRAIT devices, swap width and height to show the actual recording dimensions.
+     */
+    val displayRecordVideoWidth: Int
+        get() = when (statusReportingManager.deviceType) {
+            DeviceType.PORTRAIT -> recordVideoHeight
+            DeviceType.LANDSCAPE -> recordVideoWidth
+        }
+
+    /**
+     * Get displayed record video height based on device type.
+     * For PORTRAIT devices, swap width and height to show the actual recording dimensions.
+     */
+    val displayRecordVideoHeight: Int
+        get() = when (statusReportingManager.deviceType) {
+            DeviceType.PORTRAIT -> recordVideoWidth
+            DeviceType.LANDSCAPE -> recordVideoHeight
+        }
 
     private var stream: GenericStream? = null
 
@@ -269,11 +303,11 @@ class MainViewModel(
 
 
     init {
-
-        when (orientation) {
-            Orientation.LANDSCAPE -> angle.setLandscape()
-            Orientation.PORTRAIT -> angle.setPortrait()
-            null -> Unit
+        // Initialize angle based on device type.
+        // Device type is determined by device ID prefix (P for portrait, M for landscape).
+        when (statusReportingManager.deviceType) {
+            DeviceType.LANDSCAPE -> angle.setLandscape()
+            DeviceType.PORTRAIT -> angle.setPortrait()
         }
     }
 
@@ -357,15 +391,7 @@ class MainViewModel(
             // Unify video rotation and dimension handling to resolve scattered code issues.
             val (videoWidth, videoHeight, rotation, finalRecordWidth, finalRecordHeight) = when (statusReportingManager.deviceType) {
                 DeviceType.PORTRAIT -> {
-                    // P-series (Portrait device): Set rotation filter and parameters.
-                    val rotationFilter = RotationFilterRender()
-                    rotationFilter.setRotation(90)
-                    localStream.getGlInterface().setFilter(rotationFilter)
-                    // Return dimensions and rotation angle, also handle recording stream dimension conversion.
-                    // For portrait devices, the recording stream also needs to swap width and height.
-                    val recordW = recordVideoHeight  // Swap: use original height as width
-                    val recordH = recordVideoWidth   // Swap: use original width as height
-                    Quintuple(shortSide, longSide, 90, recordW, recordH)
+                    Quintuple(longSide, shortSide, getDeviceRotation(), recordVideoWidth, recordVideoHeight)
                 }
                 DeviceType.LANDSCAPE -> {
                     // M-series (Landscape device): Use the original logic.
@@ -986,15 +1012,6 @@ class MainViewModel(
         CONNECTED,
         FAILED,
         DISCONNECTED
-    }
-
-    enum class Orientation(val argumentValue: String) {
-        LANDSCAPE("landscape"), PORTRAIT("portrait");
-
-        companion object {
-            fun fromArgumentValue(value: String?): Orientation? =
-                entries.find { it.argumentValue == value }
-        }
     }
 
     enum class AudioChannel(val argumentValue: String) {

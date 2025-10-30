@@ -14,7 +14,6 @@ object DefaultConfig {
     // Video Configuration
     const val DEFAULT_LONG_SIDE = 640
     const val DEFAULT_SHORT_SIDE = 360
-    const val DEFAULT_ORIENTATION = "landscape" // "landscape" or "portrait"
     const val DEFAULT_VIDEO_BITRATE = 512 // kbps
     const val DEFAULT_VIDEO_FPS = 24 // fps
 
@@ -42,7 +41,6 @@ object DefaultConfig {
             "streamKey" to DEFAULT_STREAM_KEY,
             "longSide" to DEFAULT_LONG_SIDE,
             "shortSide" to DEFAULT_SHORT_SIDE,
-            "orientation" to DEFAULT_ORIENTATION,
             "videoBitrate" to DEFAULT_VIDEO_BITRATE,
             "audioSampleRate" to DEFAULT_AUDIO_SAMPLE_RATE,
             "audioBitrate" to DEFAULT_AUDIO_BITRATE,
