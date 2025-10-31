@@ -39,6 +39,11 @@ class FileTransferServer(
             if (!exists()) mkdirs()
         }
     }
+    
+    // Cache for file list ETag to reduce network traffic
+    private var cachedFileListETag: String? = null
+    private var cachedFileListJson: String? = null
+    private var cachedFileListTimestamp: Long = 0
 
     override fun serve(session: IHTTPSession): Response {
         val uri = session.uri
@@ -46,7 +51,7 @@ class FileTransferServer(
 
         return try {
             when {
-                uri == "/files" && session.method == Method.GET -> handleFileList()
+                uri == "/files" && session.method == Method.GET -> handleFileList(session)
                 uri.startsWith("/download/") && session.method == Method.GET -> handleDownload(uri, session)
                 uri.startsWith("/delete/") && session.method == Method.DELETE -> handleDelete(uri)
                 else -> newFixedLengthResponse(Response.Status.NOT_FOUND, MIME_PLAINTEXT, "Not Found")
@@ -75,12 +80,15 @@ class FileTransferServer(
      * Response: [{"name": "xxx.mp4", "size": 12345, "lastModified": 1234567890, "md5": "abc123..."}]
      * Only returns video files that have a corresponding .md5 file.
      * 
-     * Performance optimization: Use coroutines to read multiple MD5 files in parallel.
+     * Performance optimization: 
+     * 1. Use coroutines to read multiple MD5 files in parallel.
+     * 2. ETag caching to reduce network traffic when file list hasn't changed.
      */
-    private fun handleFileList(): Response {
+    private fun handleFileList(session: IHTTPSession): Response {
         val startTime = System.currentTimeMillis()
         
-        // Step 1: Filter all valid .mp4 files (those with a corresponding .md5 file).
+        // Step 1: Generate a quick ETag based on directory contents (file names and modification times)
+        // This is much faster than reading all MD5 files
         val validFiles = recordFolder.listFiles { file ->
             if (!file.isFile || !file.name.endsWith(".mp4")) {
                 return@listFiles false
@@ -89,10 +97,69 @@ class FileTransferServer(
             md5File.exists()
         } ?: emptyArray()
         
-        val filterTime = System.currentTimeMillis()
-        Log.d(TAG, "File filtering complete: ${validFiles.size} files, took ${filterTime - startTime}ms")
+        // Generate ETag from file names and lastModified timestamps
+        // This is a fast operation that doesn't require reading file contents
+        val etagSource = validFiles.sortedBy { it.name }.joinToString("|") { 
+            "${it.name}:${it.lastModified()}" 
+        }
+        val currentETag = if (etagSource.isEmpty()) {
+            "empty"
+        } else {
+            MD5Utils.quickHash(etagSource)
+        }
         
-        // Step 2: Use coroutines to read all MD5 files in parallel.
+        val etagGenTime = System.currentTimeMillis() - startTime
+        Log.d(TAG, "ETag generated in ${etagGenTime}ms: $currentETag")
+        
+        // Step 2: Check If-None-Match header for cache validation
+        val clientETag = session.headers["if-none-match"]
+        if (clientETag != null && clientETag == currentETag) {
+            // File list hasn't changed, return 304 Not Modified
+            Log.d(TAG, "File list unchanged (ETag match), returning 304 Not Modified")
+            val response = newFixedLengthResponse(
+                Response.Status.NOT_MODIFIED,
+                "application/json",
+                ""
+            )
+            response.addHeader("ETag", currentETag)
+            response.addHeader("Cache-Control", "max-age=30") // Cache for 30 seconds
+            response.addHeader("Access-Control-Allow-Origin", "*")
+            response.addHeader("Access-Control-Expose-Headers", "ETag")
+            return response
+        }
+        
+        // Step 3: File list changed or no ETag provided, generate full response
+        // Note: ETag mismatch can happen when:
+        // - Files were added/removed on Android side
+        // - File modification times changed
+        // - PC side has stale cache (files deleted on Android but PC cache still has them)
+        // In all cases, we return the current file list and PC will update its cache
+        if (clientETag != null) {
+            Log.d(TAG, "File list changed (ETag mismatch: client=${clientETag.substring(0, minOf(8, clientETag.length))}..., server=${currentETag.substring(0, minOf(8, currentETag.length))}...), generating full response (${validFiles.size} files)")
+        } else {
+            Log.d(TAG, "No ETag provided, generating full response (${validFiles.size} files)")
+        }
+        
+        // Use cached response if ETag matches our cache
+        // Cache is valid for 5 minutes to survive multiple scan cycles (PC scans every 60 seconds)
+        if (currentETag == cachedFileListETag && 
+            cachedFileListJson != null && 
+            System.currentTimeMillis() - cachedFileListTimestamp < 300000) {
+            // Use cached JSON response (cache valid for 5 minutes)
+            Log.d(TAG, "Using cached JSON response (cache age: ${(System.currentTimeMillis() - cachedFileListTimestamp) / 1000}s)")
+            val response = newFixedLengthResponse(
+                Response.Status.OK,
+                "application/json",
+                cachedFileListJson
+            )
+            response.addHeader("ETag", currentETag)
+            response.addHeader("Cache-Control", "max-age=30")
+            response.addHeader("Access-Control-Allow-Origin", "*")
+            response.addHeader("Access-Control-Expose-Headers", "ETag")
+            return response
+        }
+        
+        // Step 4: Read all MD5 files in parallel and build response
         val files = runBlocking(Dispatchers.IO) {
             validFiles.map { file ->
                 async {
@@ -114,17 +181,24 @@ class FileTransferServer(
         }
 
         val processingTime = System.currentTimeMillis() - startTime
-        Log.d(TAG, "File list prepared: ${files.size} files, took ${processingTime}ms (parallel MD5 reading)")
+        Log.d(TAG, "File list prepared: ${files.size} files, took ${processingTime}ms (with ETag caching)")
+
+        // Cache the response
+        val jsonResponse = gson.toJson(files)
+        cachedFileListETag = currentETag
+        cachedFileListJson = jsonResponse
+        cachedFileListTimestamp = System.currentTimeMillis()
 
         val response = newFixedLengthResponse(
             Response.Status.OK,
             "application/json",
-            gson.toJson(files)
+            jsonResponse
         )
         
-        // Keep GZIP compression to reduce network traffic.
-        // NanoHTTPD automatically decides whether to compress based on the client's Accept-Encoding header.
+        response.addHeader("ETag", currentETag)
+        response.addHeader("Cache-Control", "max-age=30") // Cache for 30 seconds
         response.addHeader("Access-Control-Allow-Origin", "*")
+        response.addHeader("Access-Control-Expose-Headers", "ETag")
         
         return response
     }
