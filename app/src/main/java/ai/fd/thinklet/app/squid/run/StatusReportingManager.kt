@@ -57,6 +57,11 @@ data class StatusUpdate(
 
 data class Command(val command: String)
 
+data class FileListUpdateNotification(
+    val type: String = "fileListUpdated",
+    val deviceId: String
+)
+
 class StatusReportingManager(
     private val context: Context,
     private var streamUrl: String?,
@@ -616,6 +621,25 @@ class StatusReportingManager(
         Log.d(TAG, "📤 Sending status: $statusJson")
         Log.d(TAG, "📊 File server status: enabled=$fileServerEnabled, initialized=$fileServerInitialized, port=8889")
         webSocket?.send(statusJson)
+    }
+
+    /**
+     * Send a notification to PC side that the file list has been updated.
+     * This allows PC side to immediately trigger a file scan instead of waiting for the next polling cycle.
+     */
+    fun notifyFileListUpdated() {
+        if (webSocket == null) {
+            Log.w(TAG, "WebSocket is not connected, skipping file list update notification.")
+            return
+        }
+        if (!fileServerEnabled) {
+            Log.d(TAG, "File server is not enabled, skipping file list update notification.")
+            return
+        }
+        val notification = FileListUpdateNotification(deviceId = deviceId)
+        val notificationJson = gson.toJson(notification)
+        Log.d(TAG, "📤 Sending file list update notification: $notificationJson")
+        webSocket?.send(notificationJson)
     }
 
     /**

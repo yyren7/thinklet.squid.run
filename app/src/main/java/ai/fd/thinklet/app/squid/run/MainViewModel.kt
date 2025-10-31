@@ -835,6 +835,8 @@ class MainViewModel(
                                         val success = MD5Utils.calculateAndSaveMD5(recordFile)
                                         if (success) {
                                             Log.i("MainViewModel", "MD5 file created successfully for: ${recordFile.name}")
+                                            // Notify PC side that file list has been updated
+                                            statusReportingManager.notifyFileListUpdated()
                                         } else {
                                             Log.w("MainViewModel", "Failed to create MD5 file for: ${recordFile.name}")
                                         }
