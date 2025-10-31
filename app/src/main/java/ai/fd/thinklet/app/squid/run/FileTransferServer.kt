@@ -76,16 +76,25 @@ class FileTransferServer(
 
     /**
      * Get the file list.
-     * API: GET /files
-     * Response: [{"name": "xxx.mp4", "size": 12345, "lastModified": 1234567890, "md5": "abc123..."}]
+     * API: GET /files?page=1&pageSize=50
+     * Query parameters:
+     *   - page: Page number (default: 1, 0 means all files)
+     *   - pageSize: Number of files per page (default: 50)
+     * Response: {"total": 100, "page": 1, "pageSize": 50, "files": [...]}
      * Only returns video files that have a corresponding .md5 file.
      * 
      * Performance optimization: 
      * 1. Use coroutines to read multiple MD5 files in parallel.
      * 2. ETag caching to reduce network traffic when file list hasn't changed.
+     * 3. Pagination support to prevent timeout for large file lists.
      */
     private fun handleFileList(session: IHTTPSession): Response {
         val startTime = System.currentTimeMillis()
+        
+        // Parse pagination parameters
+        val params = session.parms
+        val page = params["page"]?.toIntOrNull() ?: 0 // 0 means all files (backward compatibility)
+        val pageSize = params["pageSize"]?.toIntOrNull() ?: 50
         
         // Step 1: Generate a quick ETag based on directory contents (file names and modification times)
         // This is much faster than reading all MD5 files
@@ -113,8 +122,8 @@ class FileTransferServer(
         
         // Step 2: Check If-None-Match header for cache validation
         val clientETag = session.headers["if-none-match"]
-        if (clientETag != null && clientETag == currentETag) {
-            // File list hasn't changed, return 304 Not Modified
+        if (clientETag != null && clientETag == currentETag && page == 0) {
+            // File list hasn't changed, return 304 Not Modified (only for non-paginated requests)
             Log.d(TAG, "File list unchanged (ETag match), returning 304 Not Modified")
             val response = newFixedLengthResponse(
                 Response.Status.NOT_MODIFIED,
@@ -128,40 +137,42 @@ class FileTransferServer(
             return response
         }
         
-        // Step 3: File list changed or no ETag provided, generate full response
-        // Note: ETag mismatch can happen when:
-        // - Files were added/removed on Android side
-        // - File modification times changed
-        // - PC side has stale cache (files deleted on Android but PC cache still has them)
-        // In all cases, we return the current file list and PC will update its cache
-        if (clientETag != null) {
-            Log.d(TAG, "File list changed (ETag mismatch: client=${clientETag.substring(0, minOf(8, clientETag.length))}..., server=${currentETag.substring(0, minOf(8, currentETag.length))}...), generating full response (${validFiles.size} files)")
+        // Step 3: Calculate pagination range
+        val totalFiles = validFiles.size
+        val sortedFiles = validFiles.sortedBy { it.name }
+        
+        // If page is 0, return all files (backward compatibility)
+        val filesToProcess = if (page == 0) {
+            sortedFiles
         } else {
-            Log.d(TAG, "No ETag provided, generating full response (${validFiles.size} files)")
+            val startIndex = (page - 1) * pageSize
+            val endIndex = minOf(startIndex + pageSize, sortedFiles.size)
+            if (startIndex >= sortedFiles.size) {
+                // Page out of range, return empty result
+                val emptyResponse = mapOf(
+                    "total" to totalFiles,
+                    "page" to page,
+                    "pageSize" to pageSize,
+                    "files" to emptyList<Map<String, Any>>()
+                )
+                val jsonResponse = gson.toJson(emptyResponse)
+                val response = newFixedLengthResponse(
+                    Response.Status.OK,
+                    "application/json",
+                    jsonResponse
+                )
+                response.addHeader("ETag", currentETag)
+                response.addHeader("Cache-Control", "max-age=30")
+                response.addHeader("Access-Control-Allow-Origin", "*")
+                response.addHeader("Access-Control-Expose-Headers", "ETag")
+                return response
+            }
+            sortedFiles.subList(startIndex, endIndex)
         }
         
-        // Use cached response if ETag matches our cache
-        // Cache is valid for 5 minutes to survive multiple scan cycles (PC scans every 60 seconds)
-        if (currentETag == cachedFileListETag && 
-            cachedFileListJson != null && 
-            System.currentTimeMillis() - cachedFileListTimestamp < 300000) {
-            // Use cached JSON response (cache valid for 5 minutes)
-            Log.d(TAG, "Using cached JSON response (cache age: ${(System.currentTimeMillis() - cachedFileListTimestamp) / 1000}s)")
-            val response = newFixedLengthResponse(
-                Response.Status.OK,
-                "application/json",
-                cachedFileListJson
-            )
-            response.addHeader("ETag", currentETag)
-            response.addHeader("Cache-Control", "max-age=30")
-            response.addHeader("Access-Control-Allow-Origin", "*")
-            response.addHeader("Access-Control-Expose-Headers", "ETag")
-            return response
-        }
-        
-        // Step 4: Read all MD5 files in parallel and build response
+        // Step 4: Read MD5 files in parallel for the requested page
         val files = runBlocking(Dispatchers.IO) {
-            validFiles.map { file ->
+            filesToProcess.map { file ->
                 async {
                     // Read MD5 in parallel
                     val md5 = MD5Utils.readMD5FromFileAsync(file)
@@ -181,13 +192,24 @@ class FileTransferServer(
         }
 
         val processingTime = System.currentTimeMillis() - startTime
-        Log.d(TAG, "File list prepared: ${files.size} files, took ${processingTime}ms (with ETag caching)")
+        Log.d(TAG, "File list prepared: ${files.size} files (page=$page, pageSize=$pageSize, total=$totalFiles), took ${processingTime}ms")
 
-        // Cache the response
-        val jsonResponse = gson.toJson(files)
-        cachedFileListETag = currentETag
-        cachedFileListJson = jsonResponse
-        cachedFileListTimestamp = System.currentTimeMillis()
+        // Build response with pagination info
+        val responseData = if (page == 0) {
+            // Backward compatibility: return array directly when page=0
+            files
+        } else {
+            // Paginated response: return object with metadata
+            mapOf(
+                "total" to totalFiles,
+                "page" to page,
+                "pageSize" to pageSize,
+                "totalPages" to ((totalFiles + pageSize - 1) / pageSize),
+                "files" to files
+            )
+        }
+        
+        val jsonResponse = gson.toJson(responseData)
 
         val response = newFixedLengthResponse(
             Response.Status.OK,
