@@ -34,10 +34,16 @@ class FileTransferServer(
     }
 
     private val gson = Gson()
+    private val storageManager: StorageManager by lazy {
+        StorageManager(context)
+    }
+    
+    /**
+     * Get primary recording folder (based on current storage preference).
+     * This is for backward compatibility and new recordings.
+     */
     private val recordFolder: File by lazy {
-        File(context.getExternalFilesDir(Environment.DIRECTORY_MOVIES), "SquidRun").apply {
-            if (!exists()) mkdirs()
-        }
+        storageManager.getRecordingFolder()
     }
     
     // Cache for file list ETag to reduce network traffic
@@ -83,6 +89,8 @@ class FileTransferServer(
      * Response: {"total": 100, "page": 1, "pageSize": 50, "files": [...]}
      * Only returns video files that have a corresponding .md5 file.
      * 
+     * Now supports scanning files from both internal storage and SD card locations.
+     * 
      * Performance optimization: 
      * 1. Use coroutines to read multiple MD5 files in parallel.
      * 2. ETag caching to reduce network traffic when file list hasn't changed.
@@ -96,15 +104,20 @@ class FileTransferServer(
         val page = params["page"]?.toIntOrNull() ?: 0 // 0 means all files (backward compatibility)
         val pageSize = params["pageSize"]?.toIntOrNull() ?: 50
         
-        // Step 1: Generate a quick ETag based on directory contents (file names and modification times)
-        // This is much faster than reading all MD5 files
-        val validFiles = recordFolder.listFiles { file ->
-            if (!file.isFile || !file.name.endsWith(".mp4")) {
-                return@listFiles false
-            }
-            val md5File = File(file.parent, "${file.name}.md5")
-            md5File.exists()
-        } ?: emptyArray()
+        // Step 1: Collect files from all recording folders (internal storage + SD card)
+        val allRecordingFolders = storageManager.getAllRecordingFolders()
+        val validFiles = mutableListOf<File>()
+        
+        for (folder in allRecordingFolders) {
+            val filesInFolder = folder.listFiles { file ->
+                if (!file.isFile || !file.name.endsWith(".mp4")) {
+                    return@listFiles false
+                }
+                val md5File = File(file.parent, "${file.name}.md5")
+                md5File.exists()
+            } ?: emptyArray()
+            validFiles.addAll(filesInFolder)
+        }
         
         // Generate ETag from file names and lastModified timestamps
         // This is a fast operation that doesn't require reading file contents
@@ -229,12 +242,25 @@ class FileTransferServer(
      * Download a file (with support for resumable downloads).
      * API: GET /download/{filename}
      * Supports the Range request header.
+     * 
+     * Searches for the file in all recording folders (internal storage + SD card).
      */
     private fun handleDownload(uri: String, session: IHTTPSession): Response {
         val filename = uri.substringAfter("/download/")
-        val file = File(recordFolder, filename)
+        
+        // Search for file in all recording folders
+        val allRecordingFolders = storageManager.getAllRecordingFolders()
+        var file: File? = null
+        
+        for (folder in allRecordingFolders) {
+            val candidateFile = File(folder, filename)
+            if (candidateFile.exists() && candidateFile.isFile) {
+                file = candidateFile
+                break
+            }
+        }
 
-        if (!file.exists() || !file.isFile) {
+        if (file == null) {
             return newFixedLengthResponse(
                 Response.Status.NOT_FOUND,
                 "application/json",
@@ -350,20 +376,35 @@ class FileTransferServer(
     /**
      * Delete a file.
      * API: DELETE /delete/{filename}
+     * 
+     * Searches for the file in all recording folders (internal storage + SD card).
      */
     private fun handleDelete(uri: String): Response {
         val filename = uri.substringAfter("/delete/")
-        val file = File(recordFolder, filename)
+        
+        // Search for file in all recording folders
+        val allRecordingFolders = storageManager.getAllRecordingFolders()
+        var file: File? = null
+        var folder: File? = null
+        
+        for (recordingFolder in allRecordingFolders) {
+            val candidateFile = File(recordingFolder, filename)
+            if (candidateFile.exists() && candidateFile.isFile) {
+                file = candidateFile
+                folder = recordingFolder
+                break
+            }
+        }
 
-        return if (file.exists() && file.delete()) {
+        return if (file != null && file.delete()) {
             // Also delete the corresponding .md5 file.
-            val md5File = File(recordFolder, "$filename.md5")
+            val md5File = File(folder!!, "$filename.md5")
             if (md5File.exists()) {
                 md5File.delete()
                 Log.i(TAG, "MD5 file deleted: $filename.md5")
             }
             
-            Log.i(TAG, "File deleted: $filename")
+            Log.i(TAG, "File deleted: $filename from ${folder.absolutePath}")
             newFixedLengthResponse(
                 Response.Status.OK,
                 "application/json",

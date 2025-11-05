@@ -170,6 +170,21 @@ class MainActivity : AppCompatActivity() {
         val deviceId = statusReportingManager.deviceId
         viewModel.setStreamKey(deviceId)
         statusReportingManager.updateStreamKey(deviceId)
+        
+        // Auto-switch to SD card if available
+        if (viewModel.isSdCardAvailable()) {
+            viewModel.setRecordingStorageType(StorageManager.STORAGE_TYPE_SD_CARD)
+            Log.i("MainActivity", "✅ SD card detected, switched recording storage to SD card")
+        } else {
+            Log.i("MainActivity", "ℹ️ SD card not available, using internal storage")
+        }
+        
+        // Check storage capacity after initialization
+        lifecycleScope.launch {
+            // Delay to ensure StorageManager is fully initialized
+            delay(500)
+            viewModel.checkStorageCapacity()
+        }
 
         // Display the deviceId on the UI.
         binding.deviceId.text = deviceId

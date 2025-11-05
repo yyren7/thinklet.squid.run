@@ -20,6 +20,11 @@ class SquidRunApplication : Application(), ViewModelStoreOwner {
         NetworkManager(applicationContext)
     }
 
+    // Lazy initialization of StorageManager
+    val storageManager: StorageManager by lazy {
+        StorageManager(applicationContext)
+    }
+
     // Lazy initialization of StatusReportingManager to ensure it's created only once.
     // It's tied to the Application's lifecycle, not an Activity's.
     val statusReportingManager: StatusReportingManager by lazy {
@@ -28,7 +33,8 @@ class SquidRunApplication : Application(), ViewModelStoreOwner {
         StatusReportingManager(
             context = applicationContext,
             streamUrl = null, // Initialize with null, will be updated later
-            networkManager = networkManager // Inject the NetworkManager instance
+            networkManager = networkManager, // Inject the NetworkManager instance
+            storageManager = storageManager // Inject the StorageManager instance
         ).also {
             GlobalScope.launch {
                 it.start()

@@ -63,6 +63,19 @@ class MainViewModel(
     val ttsManager: SherpaOnnxTTSManager by lazy {
         (application as SquidRunApplication).ttsManager
     }
+    
+    private val storageManager: StorageManager by lazy {
+        (application as SquidRunApplication).storageManager.apply {
+            setStorageCapacityListener(object : StorageCapacityListener {
+                override fun onStorageCapacityUpdated(
+                    internalCapacity: StorageCapacity?,
+                    sdCardCapacity: StorageCapacity?
+                ) {
+                    Log.i("MainViewModel", "📊 Storage capacity updated - Internal: ${internalCapacity?.availableGB?.let { String.format("%.2f", it) } ?: "N/A"} GB, SD: ${sdCardCapacity?.availableGB?.let { String.format("%.2f", it) } ?: "N/A"} GB")
+                }
+            })
+        }
+    }
     private val ledController = LedController(application)
     private val angle: Angle by lazy(LazyThreadSafetyMode.NONE, ::Angle)
 
@@ -165,6 +178,39 @@ class MainViewModel(
 
     fun setStreamKey(newStreamKey: String) {
         _streamKey.value = newStreamKey
+    }
+    
+    /**
+     * Set storage location for recording files.
+     * @param storageType "internal" or "sd_card"
+     */
+    fun setRecordingStorageType(storageType: String) {
+        storageManager.setStorageType(storageType)
+        Log.i("MainViewModel", "Recording storage type set to: $storageType")
+    }
+    
+    /**
+     * Get current storage type for recording files.
+     * @return "internal" or "sd_card"
+     */
+    fun getRecordingStorageType(): String {
+        return storageManager.getCurrentStorageType()
+    }
+    
+    /**
+     * Check if SD card is available.
+     * @return true if SD card is available and writable
+     */
+    fun isSdCardAvailable(): Boolean {
+        return storageManager.isSdCardAvailable()
+    }
+    
+    /**
+     * Check storage capacity for both internal storage and SD card.
+     * This method can be called manually, e.g., during app initialization.
+     */
+    fun checkStorageCapacity() {
+        storageManager.checkAndNotifyCapacity("AppInitialization")
     }
 
     private val longSide: Int = savedState.get<Int>("longSide") ?: DefaultConfig.DEFAULT_LONG_SIDE
@@ -300,6 +346,17 @@ class MainViewModel(
     private val ZERO_BITRATE_WARNING_THRESHOLD = 3  // Warn after 3 consecutive zeros (~3 seconds)
     private val ZERO_BITRATE_AUTO_STOP_THRESHOLD = 10  // Auto-stop after 10 consecutive zeros (~10 seconds)
     private val WARNING_COOLDOWN_MS = 5000L  // Only warn once every 5 seconds
+    
+    // Storage capacity monitoring during recording
+    private var recordingCapacityCheckJob: Job? = null
+    private val RECORDING_CAPACITY_CHECK_INTERVAL_MS = 5000L  // Check every 5 seconds during recording
+    @Volatile
+    private var isHandlingStorageSwitch: Boolean = false  // Flag to prevent concurrent storage switch handling
+    
+    // Battery level monitoring
+    private val LOW_BATTERY_THRESHOLD = 5  // Low battery threshold: 5%
+    private val _currentBatteryLevel = MutableStateFlow(-1)
+    private val _isBatteryCharging = MutableStateFlow(false)
 
 
     init {
@@ -308,6 +365,46 @@ class MainViewModel(
         when (statusReportingManager.deviceType) {
             DeviceType.LANDSCAPE -> angle.setLandscape()
             DeviceType.PORTRAIT -> angle.setPortrait()
+        }
+        
+        // Start file list monitoring
+        storageManager.startFileListMonitoring()
+        
+        // Set up battery level listener
+        statusReportingManager.setBatteryLevelListener(object : BatteryLevelListener {
+            override fun onBatteryLevelChanged(level: Int, isCharging: Boolean) {
+                _currentBatteryLevel.value = level
+                _isBatteryCharging.value = isCharging
+                
+                // Check if we need to stop recording due to low battery
+                if (level <= LOW_BATTERY_THRESHOLD && !isCharging && _isRecording.value) {
+                    Log.w("MainViewModel", "⚠️ Battery level critically low ($level%), stopping recording")
+                    viewModelScope.launch(Dispatchers.Main) {
+                        streamingEventMutableSharedFlow.tryEmit(
+                            StreamingEvent("Battery critically low ($level%), stopping recording")
+                        )
+                        ttsManager.speak("Battery critically low. Stopping recording.")
+                        stopRecording { success ->
+                            if (success) {
+                                Log.i("MainViewModel", "✅ Recording stopped due to low battery")
+                            } else {
+                                Log.e("MainViewModel", "❌ Failed to stop recording on low battery")
+                            }
+                        }
+                    }
+                }
+            }
+        })
+        
+        // Observe recording state to start/stop capacity monitoring
+        viewModelScope.launch {
+            _isRecording.collect { isRecording ->
+                if (isRecording) {
+                    startRecordingCapacityMonitoring()
+                } else {
+                    stopRecordingCapacityMonitoring()
+                }
+            }
         }
     }
 
@@ -761,18 +858,68 @@ class MainViewModel(
         // LED will be started in RecordController.Status.STARTED callback
 
         try {
-            // Generate recording file path
-            val recordFolder = File(
-                application.getExternalFilesDir(Environment.DIRECTORY_MOVIES),
-                "SquidRun"
-            )
-            if (!recordFolder.exists()) {
-                recordFolder.mkdirs()
+            // Check battery level before starting recording
+            val currentBatteryLevel = _currentBatteryLevel.value
+            val isCharging = _isBatteryCharging.value
+            if (currentBatteryLevel in 0..LOW_BATTERY_THRESHOLD && !isCharging) {
+                val errorMsg = "Battery level too low ($currentBatteryLevel%). Cannot start recording. Please charge the device."
+                Log.e("MainViewModel", "❌ $errorMsg")
+                streamingEventMutableSharedFlow.tryEmit(
+                    StreamingEvent(errorMsg)
+                )
+                ttsManager.speak("Battery level too low. Cannot start recording.")
+                return false
             }
-
+            
+            // Check storage capacity and select appropriate storage path
+            val storageCheckResult = storageManager.checkAndSelectStorageForRecording()
+            
+            when (storageCheckResult) {
+                is StorageManager.RecordingStorageCheckResult.Success -> {
+                    Log.i("MainViewModel", "✅ Storage check passed, using ${storageCheckResult.storageType} storage")
+                }
+                is StorageManager.RecordingStorageCheckResult.Switched -> {
+                    Log.i("MainViewModel", "🔄 Storage switched from ${storageCheckResult.oldStorageType} to ${storageCheckResult.newStorageType}")
+                    streamingEventMutableSharedFlow.tryEmit(
+                        StreamingEvent("Storage switched from ${storageCheckResult.oldStorageType} to ${storageCheckResult.newStorageType} for recording")
+                    )
+                    ttsManager.speak("Storage switched to ${storageCheckResult.newStorageType}")
+                }
+                is StorageManager.RecordingStorageCheckResult.InsufficientStorage -> {
+                    val errorMsg = buildString {
+                        append("Insufficient storage space. ")
+                        append("Internal: ${String.format("%.2f", storageCheckResult.internalAvailableGB)} GB available. ")
+                        if (storageCheckResult.sdCardAvailableGB != null) {
+                            append("SD card: ${String.format("%.2f", storageCheckResult.sdCardAvailableGB)} GB available. ")
+                        } else {
+                            append("SD card: Not available. ")
+                        }
+                        append("At least 1 GB required for recording.")
+                    }
+                    Log.e("MainViewModel", "❌ $errorMsg")
+                    streamingEventMutableSharedFlow.tryEmit(
+                        StreamingEvent(errorMsg)
+                    )
+                    ttsManager.speak("Insufficient storage space. Cannot start recording.")
+                    return false
+                }
+                is StorageManager.RecordingStorageCheckResult.Error -> {
+                    Log.e("MainViewModel", "❌ Storage check failed: ${storageCheckResult.message}")
+                    streamingEventMutableSharedFlow.tryEmit(
+                        StreamingEvent("Storage check failed: ${storageCheckResult.message}")
+                    )
+                    ttsManager.speak("Storage check failed. Cannot start recording.")
+                    return false
+                }
+            }
+            
+            // Generate recording file path using StorageManager
+            val recordFolder = storageManager.getRecordingFolder()
             val timestamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date())
             val recordFile = File(recordFolder, "recording_$timestamp.mp4")
             val recordPath = recordFile.absolutePath
+            
+            Log.i("MainViewModel", "Recording to: $recordPath (storage: ${storageManager.getCurrentStorageType()})")
 
             // Start recording
             streamSnapshot.startRecord(
@@ -837,6 +984,8 @@ class MainViewModel(
                                             Log.i("MainViewModel", "MD5 file created successfully for: ${recordFile.name}")
                                             // Notify PC side that file list has been updated
                                             statusReportingManager.notifyFileListUpdated()
+                                            // Check storage capacity after file is fully written
+                                            storageManager.checkAndNotifyCapacity("RecordingComplete[afterMD5:${recordFile.name}]")
                                         } else {
                                             Log.w("MainViewModel", "Failed to create MD5 file for: ${recordFile.name}")
                                         }
@@ -1165,6 +1314,14 @@ class MainViewModel(
         super.onCleared()
         Log.i("MainViewModel", "ViewModel is being cleared")
         
+        // Stop capacity monitoring
+        stopRecordingCapacityMonitoring()
+        storageManager.stopFileListMonitoring()
+        storageManager.setStorageCapacityListener(null)
+        
+        // Clear battery level listener
+        statusReportingManager.setBatteryLevelListener(null)
+        
         stream?.let { localStream ->
             // Use viewModelScope.launch(Dispatchers.IO) to perform cleanup in the background
             // This avoids blocking the main thread, which can cause ANRs.
@@ -1295,6 +1452,104 @@ class MainViewModel(
             else -> 
                 "Low/No data from camera or network congestion. Check WiFi signal."
         }
+    }
+    
+    /**
+     * Start periodic storage capacity monitoring during recording.
+     * Checks capacity every 5 seconds while recording.
+     * If current path becomes insufficient (< 1GB), stops recording and restarts with capacity check.
+     */
+    private fun startRecordingCapacityMonitoring() {
+        stopRecordingCapacityMonitoring()
+        
+        recordingCapacityCheckJob = viewModelScope.launch {
+            // Check immediately on start
+            storageManager.checkAndNotifyCapacity("RecordingTimer[initial]")
+            
+            // Then check every 5 seconds
+            var checkCount = 1
+            while (true) {
+                delay(RECORDING_CAPACITY_CHECK_INTERVAL_MS)
+                if (!_isRecording.value) {
+                    break
+                }
+                
+                // Check capacity and notify
+                storageManager.checkAndNotifyCapacity("RecordingTimer[periodic:$checkCount]")
+                
+                // Check if current recording path has insufficient capacity
+                if (storageManager.isCurrentRecordingPathInsufficient()) {
+                    if (isHandlingStorageSwitch) {
+                        Log.d("MainViewModel", "⏸️ Storage switch handling already in progress, skipping check")
+                        checkCount++
+                        continue
+                    }
+                    
+                    Log.w("MainViewModel", "⚠️ Current recording path has insufficient capacity, stopping recording to switch storage")
+                    
+                    // Set flag to prevent concurrent handling
+                    isHandlingStorageSwitch = true
+                    
+                    // Stop recording and wait for file to be saved
+                    stopRecording { stopped ->
+                        if (stopped) {
+                            Log.i("MainViewModel", "✅ Recording stopped, waiting for file save completion before restarting")
+                            
+                            // Wait for file save and MD5 calculation to complete
+                            // stopRecording waits 2 seconds, MD5 calculation waits 1 second, add small buffer
+                            viewModelScope.launch {
+                                delay(2000) // Wait 2 seconds for file save and MD5 calculation
+                                
+                                // Notify user
+                                streamingEventMutableSharedFlow.tryEmit(
+                                    StreamingEvent("Storage capacity low, switching storage path and restarting recording...")
+                                )
+                                ttsManager.speak("Storage capacity low, switching storage and restarting recording")
+                                
+                                // Restart recording (this will trigger capacity check and auto-switch if needed)
+                                Log.i("MainViewModel", "🔄 Restarting recording with storage capacity check...")
+                                startRecording { success ->
+                                    if (success) {
+                                        Log.i("MainViewModel", "✅ Recording restarted successfully after storage switch")
+                                    } else {
+                                        Log.e("MainViewModel", "❌ Failed to restart recording after storage switch")
+                                        streamingEventMutableSharedFlow.tryEmit(
+                                            StreamingEvent("Failed to restart recording after storage switch")
+                                        )
+                                        ttsManager.speak("Failed to restart recording")
+                                    }
+                                    
+                                    // Reset flag after restart attempt
+                                    isHandlingStorageSwitch = false
+                                }
+                            }
+                        } else {
+                            Log.e("MainViewModel", "❌ Failed to stop recording for storage switch")
+                            streamingEventMutableSharedFlow.tryEmit(
+                                StreamingEvent("Failed to stop recording for storage switch")
+                            )
+                            // Reset flag even if stop failed
+                            isHandlingStorageSwitch = false
+                        }
+                    }
+                    
+                    // Exit monitoring loop as recording is being stopped
+                    break
+                }
+                
+                checkCount++
+            }
+        }
+        Log.i("MainViewModel", "✅ Started recording capacity monitoring (every 5 seconds)")
+    }
+    
+    /**
+     * Stop periodic storage capacity monitoring.
+     */
+    private fun stopRecordingCapacityMonitoring() {
+        recordingCapacityCheckJob?.cancel()
+        recordingCapacityCheckJob = null
+        Log.i("MainViewModel", "⏹️ Stopped recording capacity monitoring")
     }
 
     companion object {

@@ -30,11 +30,30 @@ import kotlinx.coroutines.GlobalScope
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.flow
+import kotlin.math.round
 
 enum class DeviceType {
     LANDSCAPE, // Landscape device (starts with M)
     PORTRAIT   // Portrait device (starts with P)
 }
+
+// Battery level listener interface for monitoring battery changes
+interface BatteryLevelListener {
+    /**
+     * Called when battery level changes.
+     * @param level Battery level percentage (0-100)
+     * @param isCharging Whether the device is currently charging
+     */
+    fun onBatteryLevelChanged(level: Int, isCharging: Boolean)
+}
+
+// Storage capacity data for transmission to server
+data class StorageCapacityData(
+    val totalGB: Double,
+    val availableGB: Double,
+    val usedGB: Double,
+    val usagePercent: Double
+)
 
 data class DeviceStatus(
     val batteryLevel: Int,
@@ -47,7 +66,9 @@ data class DeviceStatus(
     var isRecording: Boolean = false,
     var recordingDurationMs: Long = 0,
     var fileServerPort: Int = 8889,
-    var fileServerEnabled: Boolean = false
+    var fileServerEnabled: Boolean = false,
+    var internalStorageCapacity: StorageCapacityData? = null,
+    var sdCardCapacity: StorageCapacityData? = null
 )
 
 data class StatusUpdate(
@@ -62,10 +83,15 @@ data class FileListUpdateNotification(
     val deviceId: String
 )
 
+private fun Double.roundToTwoDecimals(): Double {
+    return round(this * 100) / 100.0
+}
+
 class StatusReportingManager(
     private val context: Context,
     private var streamUrl: String?,
-    private val networkManager: NetworkManager
+    private val networkManager: NetworkManager,
+    private val storageManager: StorageManager
 ) {
 
     var isStreamingReady: Boolean = false
@@ -100,6 +126,11 @@ class StatusReportingManager(
     @Volatile
     private var isReceiverRegistered = false
     
+    // Battery level monitoring
+    private var batteryLevelListener: BatteryLevelListener? = null
+    private var lastBatteryLevel: Int = -1
+    private var lastChargingState: Boolean = false
+    
     // Dynamic reporting interval: 15 seconds normally, 5 seconds during streaming/recording
     private var currentReportInterval: Long = NORMAL_REPORT_INTERVAL
     
@@ -115,8 +146,18 @@ class StatusReportingManager(
 
     private val powerConnectionReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
-            Log.d(TAG, "🔌 Power connection state changed, sending status update.")
-            sendDeviceStatus()
+            when (intent?.action) {
+                Intent.ACTION_POWER_CONNECTED, Intent.ACTION_POWER_DISCONNECTED -> {
+                    Log.d(TAG, "🔌 Power connection state changed, sending status update.")
+                    sendDeviceStatus()
+                    // Notify listener about charging state change
+                    checkAndNotifyBatteryChange()
+                }
+                Intent.ACTION_BATTERY_CHANGED -> {
+                    // Battery level changed, check if we need to notify listener
+                    checkAndNotifyBatteryChange()
+                }
+            }
         }
     }
 
@@ -286,10 +327,11 @@ class StatusReportingManager(
         // 1. Start the file transfer server (must be started first to ensure the service is ready for status reporting).
         startFileTransferServer()
         
-        // 2. Register for power state listening.
+        // 2. Register for power state and battery level listening.
         val intentFilter = IntentFilter().apply {
             addAction(Intent.ACTION_POWER_CONNECTED)
             addAction(Intent.ACTION_POWER_DISCONNECTED)
+            addAction(Intent.ACTION_BATTERY_CHANGED)
         }
         context.registerReceiver(powerConnectionReceiver, intentFilter)
         isReceiverRegistered = true
@@ -663,6 +705,28 @@ class StatusReportingManager(
         val wifiSignalStrength = networkManager.getWifiSignalStrength()
         val isOnline = webSocket != null
 
+        // Get storage capacity information
+        val internalCapacity = storageManager.getInternalStorageCapacity()
+        val sdCardCapacity = storageManager.getSdCardStorageCapacity()
+        
+        val internalCapacityData = internalCapacity?.let {
+            StorageCapacityData(
+                totalGB = it.totalGB.roundToTwoDecimals(),
+                availableGB = it.availableGB.roundToTwoDecimals(),
+                usedGB = it.usedGB.roundToTwoDecimals(),
+                usagePercent = it.usagePercent.roundToTwoDecimals()
+            )
+        }
+        
+        val sdCardCapacityData = sdCardCapacity?.let {
+            StorageCapacityData(
+                totalGB = it.totalGB.roundToTwoDecimals(),
+                availableGB = it.availableGB.roundToTwoDecimals(),
+                usedGB = it.usedGB.roundToTwoDecimals(),
+                usagePercent = it.usagePercent.roundToTwoDecimals()
+            )
+        }
+
         return DeviceStatus(
             batteryLevel = batteryLevel,
             isCharging = isCharging,
@@ -674,7 +738,9 @@ class StatusReportingManager(
             isRecording = this.isRecording,
             recordingDurationMs = this.recordingDurationMs,
             fileServerPort = 8889,  // File server port (fixed)
-            fileServerEnabled = this.fileServerEnabled  // File server status (managed by StatusReportingManager)
+            fileServerEnabled = this.fileServerEnabled,  // File server status (managed by StatusReportingManager)
+            internalStorageCapacity = internalCapacityData,
+            sdCardCapacity = sdCardCapacityData
         )
     }
 
@@ -689,5 +755,59 @@ class StatusReportingManager(
         // Android 10 (API 29) and above require `ACCESS_FINE_LOCATION` permission to get Wi-Fi information.
         // For simplicity, we only get the RSSI, which is available in most cases.
         return wifiManager.connectionInfo.rssi
+    }
+    
+    /**
+     * Set battery level listener to monitor battery changes.
+     */
+    fun setBatteryLevelListener(listener: BatteryLevelListener?) {
+        this.batteryLevelListener = listener
+        // Immediately notify current battery status to listener
+        if (listener != null) {
+            val batteryStatus = getCurrentBatteryStatus()
+            val batteryLevel = batteryStatus.first
+            val isCharging = batteryStatus.second
+            lastBatteryLevel = batteryLevel
+            lastChargingState = isCharging
+            listener.onBatteryLevelChanged(batteryLevel, isCharging)
+        }
+    }
+    
+    /**
+     * Get current battery status.
+     * @return Pair of (battery level percentage, is charging)
+     */
+    private fun getCurrentBatteryStatus(): Pair<Int, Boolean> {
+        val batteryStatus: Intent? = IntentFilter(Intent.ACTION_BATTERY_CHANGED).let { ifilter ->
+            context.registerReceiver(null, ifilter)
+        }
+        val batteryLevel: Int = batteryStatus?.let { intent ->
+            val level: Int = intent.getIntExtra(BatteryManager.EXTRA_LEVEL, -1)
+            val scale: Int = intent.getIntExtra(BatteryManager.EXTRA_SCALE, -1)
+            (level * 100 / scale.toFloat()).toInt()
+        } ?: -1
+
+        val status: Int = batteryStatus?.getIntExtra(BatteryManager.EXTRA_STATUS, -1) ?: -1
+        val isCharging: Boolean = status == BatteryManager.BATTERY_STATUS_CHARGING ||
+                status == BatteryManager.BATTERY_STATUS_FULL
+        
+        return Pair(batteryLevel, isCharging)
+    }
+    
+    /**
+     * Check battery status and notify listener if changed.
+     */
+    private fun checkAndNotifyBatteryChange() {
+        val listener = batteryLevelListener ?: return
+        
+        val (currentLevel, currentCharging) = getCurrentBatteryStatus()
+        
+        // Notify if battery level changed or charging state changed
+        if (currentLevel != lastBatteryLevel || currentCharging != lastChargingState) {
+            Log.d(TAG, "🔋 Battery changed: level=$currentLevel%, charging=$currentCharging (prev: level=$lastBatteryLevel%, charging=$lastChargingState)")
+            lastBatteryLevel = currentLevel
+            lastChargingState = currentCharging
+            listener.onBatteryLevelChanged(currentLevel, currentCharging)
+        }
     }
 }
