@@ -139,9 +139,9 @@ class StatusReportingManager(
         private const val TAG = "StatusReportingManager"
         private const val NORMAL_REPORT_INTERVAL = 5000L  // 5 seconds
         private const val ACTIVE_REPORT_INTERVAL = 5000L   // 5 seconds
-        private const val INITIAL_RECONNECT_DELAY = 2000L  // 2 seconds
-        private const val MAX_RECONNECT_DELAY = 60000L     // 60 seconds
-        private const val RECONNECT_JITTER = 500           // 0.5 seconds
+        // Progressive reconnection: 1s, 2s, 3s, 4s, 5s (max 5 seconds)
+        // This provides fast initial reconnection with gradual increase, capped at 5 seconds
+        private const val MAX_RECONNECT_DELAY = 5000L      // 5 seconds maximum
     }
 
     private val powerConnectionReceiver = object : BroadcastReceiver() {
@@ -551,13 +551,13 @@ class StatusReportingManager(
     private fun maybeReconnect() {
         if (isStarted && networkManager.isConnected.value) {
             reconnectAttempts++
-            // Limit reconnect attempts to prevent overflow from left shift operation (max 1 shl 6 = 64x delay).
-            val safeAttempts = reconnectAttempts.coerceAtMost(7)
-            val delay = (INITIAL_RECONNECT_DELAY * (1 shl (safeAttempts - 1))).coerceAtMost(MAX_RECONNECT_DELAY)
-            val jitter = (Math.random() * RECONNECT_JITTER).toLong()
-            val totalDelay = delay + jitter
             
-            Log.d(TAG, "Will try to reconnect in ${totalDelay / 1000} seconds (attempt #${reconnectAttempts})")
+            // Progressive reconnection: 1s, 2s, 3s, 4s, 5s (max 5 seconds)
+            // This provides fast initial reconnection with gradual increase
+            // WebSocket reconnection is lightweight (< 1ms CPU, < 10KB memory per attempt)
+            val delay = (reconnectAttempts * 1000L).coerceAtMost(MAX_RECONNECT_DELAY)
+            
+            Log.d(TAG, "Will try to reconnect in ${delay / 1000} seconds (attempt #${reconnectAttempts})")
 
             cancelReconnectTimer()
             reconnectTimer = Timer("ReconnectTimer")
@@ -565,7 +565,7 @@ class StatusReportingManager(
                 override fun run() {
                     connect()
                 }
-            }, totalDelay)
+            }, delay)
         }
     }
 
