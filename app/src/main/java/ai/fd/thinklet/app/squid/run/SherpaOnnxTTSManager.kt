@@ -24,6 +24,7 @@ import java.io.File
  * - No system dependencies, avoiding Pico TTS crash issues.
  * - Faster initialization speed.
  * - Better sound quality and naturalness.
+ * - Automatic message queuing: TTS calls before initialization are queued and played after ready.
  */
 class SherpaOnnxTTSManager(private val context: Context) {
     
@@ -41,17 +42,43 @@ class SherpaOnnxTTSManager(private val context: Context) {
     @Volatile
     private var isSpeaking = false
     
+    // TTS message queue: stores TTS requests before initialization
+    private data class TTSMessage(
+        val message: String,
+        val queueMode: Int,
+        val timestamp: Long = System.currentTimeMillis()
+    )
+    private val messageQueue = java.util.concurrent.LinkedBlockingQueue<TTSMessage>()
+    private val queueProcessor = java.util.concurrent.Executors.newSingleThreadExecutor()
+    private val maxQueueSize = 10  // Maximum queue length to avoid message backlog
+    
     init {
-        // Sherpa-ONNX does not require a startup delay and can be initialized immediately.
-        Log.i(TAG, "🚀 Initializing Sherpa-ONNX TTS...")
-        initializeTTS()
+        // Start queue processor
+        startQueueProcessor()
+        
+        // Initialize TTS asynchronously to avoid blocking constructor
+        Log.i(TAG, "🚀 Starting async TTS initialization...")
+        Thread {
+            try {
+                initializeTTS()
+            } catch (e: Exception) {
+                Log.e(TAG, "❌ Failed to initialize TTS in background", e)
+                _ttsReady.value = false
+            }
+        }.start()
     }
     
     private fun initializeTTS() {
+        val startTime = System.currentTimeMillis()
         try {
-            // Configure the TTS model path (requires placing model files in the assets/tts_models/ directory).
+            Log.i(TAG, "📦 Step 1/3: Copying model files to cache...")
+            val copyStartTime = System.currentTimeMillis()
             val modelDir = copyAssetsToCache()
+            val copyDuration = System.currentTimeMillis() - copyStartTime
+            Log.i(TAG, "✅ Model files ready (took ${copyDuration}ms)")
             
+            Log.i(TAG, "⚙️ Step 2/3: Loading TTS model...")
+            val modelLoadStartTime = System.currentTimeMillis()
             val config = getOfflineTtsConfig(
                 modelDir = modelDir,
                 modelName = "en_US-lessac-low.onnx",  // Example model
@@ -63,8 +90,11 @@ class SherpaOnnxTTSManager(private val context: Context) {
             )
             
             tts = OfflineTts(null, config)
+            val modelLoadDuration = System.currentTimeMillis() - modelLoadStartTime
+            Log.i(TAG, "✅ TTS model loaded (took ${modelLoadDuration}ms)")
             
-            // Initialize AudioTrack
+            Log.i(TAG, "🔊 Step 3/3: Initializing audio track...")
+            val audioStartTime = System.currentTimeMillis()
             val sampleRate = tts!!.sampleRate()
             val bufferSize = AudioTrack.getMinBufferSize(
                 sampleRate,
@@ -89,11 +119,22 @@ class SherpaOnnxTTSManager(private val context: Context) {
                 .setBufferSizeInBytes(bufferSize)
                 .setTransferMode(AudioTrack.MODE_STREAM)
                 .build()
+            val audioDuration = System.currentTimeMillis() - audioStartTime
+            Log.i(TAG, "✅ Audio track initialized (took ${audioDuration}ms)")
             
             _ttsReady.value = true
-            Log.i(TAG, "✅ Sherpa-ONNX TTS initialized successfully (sample rate: $sampleRate Hz)")
+            val totalDuration = System.currentTimeMillis() - startTime
+            Log.i(TAG, "✅ 🎉 Sherpa-ONNX TTS fully initialized in ${totalDuration}ms (sample rate: $sampleRate Hz)")
+            Log.i(TAG, "📊 Breakdown: Copy=${copyDuration}ms, Model=${modelLoadDuration}ms, Audio=${audioDuration}ms")
+            
+            // If there are queued messages, notify user
+            val queueSize = messageQueue.size
+            if (queueSize > 0) {
+                Log.i(TAG, "📢 TTS ready! Processing $queueSize queued message(s)...")
+            }
         } catch (e: Exception) {
-            Log.e(TAG, "❌ Failed to initialize Sherpa-ONNX TTS", e)
+            val totalDuration = System.currentTimeMillis() - startTime
+            Log.e(TAG, "❌ Failed to initialize Sherpa-ONNX TTS after ${totalDuration}ms", e)
             _ttsReady.value = false
         }
     }
@@ -174,48 +215,115 @@ class SherpaOnnxTTSManager(private val context: Context) {
     }
     
     /**
+     * Start queue processor to continuously process TTS messages
+     */
+    private fun startQueueProcessor() {
+        queueProcessor.submit {
+            Log.i(TAG, "📋 Queue processor started")
+            while (!Thread.currentThread().isInterrupted) {
+                try {
+                    // Take message from queue (blocking wait)
+                    val ttsMessage = messageQueue.take()
+                    
+                    // Wait for TTS initialization to complete
+                    while (!_ttsReady.value) {
+                        Log.d(TAG, "⏳ Waiting for TTS initialization before playing: ${ttsMessage.message}")
+                        Thread.sleep(100)
+                    }
+                    
+                    // Handle queue mode
+                    if (ttsMessage.queueMode == QUEUE_FLUSH && isSpeaking) {
+                        stopSpeaking()
+                    }
+                    
+                    // Wait for current playback to complete (if QUEUE_ADD mode)
+                    while (isSpeaking) {
+                        Thread.sleep(50)
+                    }
+                    
+                    // Play TTS
+                    playTTS(ttsMessage.message)
+                    
+                } catch (e: InterruptedException) {
+                    Log.i(TAG, "📋 Queue processor interrupted")
+                    break
+                } catch (e: Exception) {
+                    Log.e(TAG, "❌ Error in queue processor", e)
+                }
+            }
+            Log.i(TAG, "📋 Queue processor stopped")
+        }
+    }
+    
+    /**
+     * Actual method to play TTS
+     */
+    private fun playTTS(message: String) {
+        try {
+            isSpeaking = true
+            Log.d(TAG, "🔊 Generating speech: $message")
+            
+            val audio = tts!!.generate(message, sid = 0, speed = 1.0f)
+            val samples = audio.samples
+            
+            if (samples.isEmpty()) {
+                Log.w(TAG, "⚠️ Generated audio is empty for: $message")
+                return
+            }
+            
+            Log.d(TAG, "🎵 Playing audio (${samples.size} samples)")
+            audioTrack?.play()
+            audioTrack?.write(samples, 0, samples.size, AudioTrack.WRITE_BLOCKING)
+            audioTrack?.stop()
+            
+            Log.d(TAG, "✅ Speech completed: $message")
+        } catch (e: Exception) {
+            Log.e(TAG, "❌ Failed to speak: $message", e)
+        } finally {
+            isSpeaking = false
+        }
+    }
+    
+    /**
      * Asynchronously plays the text.
+     * If TTS is not initialized, messages are automatically queued and played after initialization completes
+     * 
+     * Important: This method is non-blocking and returns immediately even if TTS is initializing
      */
     fun speak(
         message: String,
         queueMode: Int = QUEUE_FLUSH,
     ) {
-        if (!_ttsReady.value) {
-            Log.w(TAG, "⚠️ TTS not ready, skipping speech: $message")
-            return
+        // Check if queue is full
+        if (messageQueue.size >= maxQueueSize) {
+            Log.w(TAG, "⚠️ TTS queue is full (${messageQueue.size}/$maxQueueSize), dropping oldest message")
+            messageQueue.poll()  // Remove oldest message
         }
         
-        if (isSpeaking && queueMode == QUEUE_FLUSH) {
-            stopSpeaking()
-        }
+        // Add message to queue
+        val ttsMessage = TTSMessage(message, queueMode)
+        val added = messageQueue.offer(ttsMessage)
         
-        // Generate and play audio on a background thread.
-        Thread {
-            try {
-                isSpeaking = true
-                Log.d(TAG, "🔊 Generating speech: $message")
-                
-                val audio = tts!!.generate(message, sid = 0, speed = 1.0f)
-                val samples = audio.samples
-                
-                if (samples.isEmpty()) {
-                    Log.w(TAG, "⚠️ Generated audio is empty for: $message")
-                    return@Thread
-                }
-                
-                Log.d(TAG, "🎵 Playing audio (${samples.size} samples)")
-                audioTrack?.play()
-                audioTrack?.write(samples, 0, samples.size, AudioTrack.WRITE_BLOCKING)
-                audioTrack?.stop()
-                
-                Log.d(TAG, "✅ Speech completed: $message")
-            } catch (e: Exception) {
-                Log.e(TAG, "❌ Failed to speak: $message", e)
-            } finally {
-                isSpeaking = false
+        if (added) {
+            if (_ttsReady.value) {
+                Log.d(TAG, "📝 TTS message queued: $message (queue size: ${messageQueue.size})")
+            } else {
+                Log.i(TAG, "⏳ TTS message queued (waiting for initialization): $message (queue size: ${messageQueue.size})")
             }
-        }.start()
+        } else {
+            Log.e(TAG, "❌ Failed to queue TTS message: $message")
+        }
     }
+    
+    /**
+     * Check if TTS is ready
+     */
+    fun isReady(): Boolean = _ttsReady.value
+    
+    /**
+     * Get the number of messages currently waiting in queue
+     */
+    fun getQueueSize(): Int = messageQueue.size
     
     private fun stopSpeaking() {
         try {
@@ -255,7 +363,6 @@ class SherpaOnnxTTSManager(private val context: Context) {
         // Use a thread pool to generate audio in parallel, then play sequentially.
         val executor = java.util.concurrent.Executors.newFixedThreadPool(2)
         val audioQueue = java.util.concurrent.LinkedBlockingQueue<FloatArray>()
-        val playingFinished = java.util.concurrent.atomic.AtomicBoolean(false)
 
         // Task 1: Generate battery status speech.
         executor.submit {
@@ -336,6 +443,11 @@ class SherpaOnnxTTSManager(private val context: Context) {
         stopSpeaking()
         
         try {
+            // Stop queue processor
+            queueProcessor.shutdownNow()
+            messageQueue.clear()
+            Log.d(TAG, "📋 Queue processor and message queue cleared")
+            
             audioTrack?.release()
             audioTrack = null
             

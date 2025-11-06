@@ -48,6 +48,42 @@ class MainActivity : AppCompatActivity() {
         (application as SquidRunApplication).statusReportingManager
     }
 
+    private val geofenceManager: GeofenceManager by lazy {
+        (application as SquidRunApplication).geofenceManager
+    }
+    
+    // Geofence event listener (created only once)
+    private val geofenceEventListener = object : GeofenceEventListener {
+        override fun onGeofenceEnter(event: GeofenceEvent) {
+            Log.i("MainActivity", "🟢 Entered geofence: ${event.zone.name}")
+            // UI updates on main thread
+            runOnUiThread {
+                viewModel.showToast("Entered geofence: ${event.zone.name}")
+                vibrator.vibrate(createStaccatoVibrationEffect(1))
+                // TTS has built-in queue management, can be called directly without blocking main thread
+                ttsManager.speak("Entered ${event.zone.name} area")
+            }
+        }
+        
+        override fun onGeofenceExit(event: GeofenceEvent) {
+            Log.i("MainActivity", "🔴 Exited geofence: ${event.zone.name}")
+            // UI updates on main thread
+            runOnUiThread {
+                viewModel.showToast("Exited geofence: ${event.zone.name}")
+                vibrator.vibrate(createStaccatoVibrationEffect(2))
+                // TTS has built-in queue management, can be called directly without blocking main thread
+                ttsManager.speak("Exited ${event.zone.name} area")
+            }
+        }
+        
+        override fun onGeofenceDwell(event: GeofenceEvent) {
+            Log.i("MainActivity", "⏱️ Dwelling in geofence: ${event.zone.name}")
+            runOnUiThread {
+                viewModel.showToast("Dwelling in ${event.zone.name} area")
+            }
+        }
+    }
+
     private val binding: ActivityMainBinding by lazy(LazyThreadSafetyMode.NONE) {
         ActivityMainBinding.inflate(layoutInflater)
     }
@@ -138,9 +174,16 @@ class MainActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         
+        // Start foreground service to protect all features
+        ThinkletForegroundService.start(this, statusReportingManager.deviceId)
+        Log.i("MainActivity", "🚀 Foreground service started to protect all features")
+        
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         enableEdgeToEdge()
         setContentView(binding.root)
+        
+        // Handle commands from intent on startup
+        handleCommandFromIntent(intent)
         ViewCompat.setOnApplyWindowInsetsListener(findViewById(R.id.main)) { v, insets ->
             val systemBars = insets.getInsets(WindowInsetsCompat.Type.systemBars())
             v.setPadding(systemBars.left, systemBars.top, systemBars.right, systemBars.bottom)
@@ -311,6 +354,8 @@ class MainActivity : AppCompatActivity() {
                 .collect {
                     binding.streaming.text = it.toString()
                     statusReportingManager.updateStreamingStatus(it)
+                    // Update foreground service notification status
+                    updateForegroundServiceStatus()
                 }
         }
         lifecycleScope.launch {
@@ -343,6 +388,8 @@ class MainActivity : AppCompatActivity() {
                         isRecording,
                         0L  // Duration always 0, frontend handles timing
                     )
+                    // Update foreground service notification status
+                    updateForegroundServiceStatus()
                 }
         }
         // Recording duration monitoring removed - frontend now handles timing
@@ -374,13 +421,46 @@ class MainActivity : AppCompatActivity() {
             togglePreview()
         }
         
+        // Add geofence event listener (only once)
+        geofenceManager.addEventListener(geofenceEventListener)
+        
+        // Monitor geofence status changes
+        lifecycleScope.launch {
+            geofenceManager.isInsideAnyGeofence
+                .flowWithLifecycle(lifecycle)
+                .collect { isInside ->
+                    binding.geofenceStatus.text = if (isInside) "INSIDE" else "OUTSIDE"
+                    binding.geofenceStatus.setTextColor(
+                        if (isInside) 
+                            getColor(android.R.color.holo_green_dark) 
+                        else 
+                            getColor(android.R.color.darker_gray)
+                    )
+                }
+        }
+        
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        Log.d("MainActivity", "🔄 onNewIntent called")
+        // Handle commands forwarded from foreground service
+        handleCommandFromIntent(intent)
     }
 
     override fun onDestroy() {
         Log.i("MainActivity", "🛑 Activity is being destroyed, cleaning up resources...")
         
-        // Unregister broadcast receivers first to avoid receiving new commands during cleanup.
+        // BroadcastReceivers in MainActivity have been moved to foreground service, keeping original unregister logic here
+        // in case there are other places using them
         unregisterReceivers()
+        
+        // Remove geofence event listener
+        geofenceManager.removeEventListener(geofenceEventListener)
+        
+        // Note: Do not stop foreground service here, because singleTask mode is used
+        // Activity destruction does not mean app exit, service should continue running
+        // Service will stop in Application.onTerminate() or when user manually closes the app
         
         Log.i("MainActivity", "✅ Activity cleanup completed")
         super.onDestroy()
@@ -391,10 +471,30 @@ class MainActivity : AppCompatActivity() {
         checkAndRequestPermissions()
         maybeNotifyLaunchErrors()
         viewModel.activityOnResume()
+        
+        // If permissions are granted, start geofence monitoring
+        if (permissionHelper.areAllPermissionsGranted()) {
+            Log.i("MainActivity", "✅ All permissions granted, starting geofence monitoring")
+            
+            // Check if Bluetooth is available
+            val beaconScanner = (application as SquidRunApplication).beaconScannerManager
+            if (beaconScanner.isBluetoothAvailable()) {
+                geofenceManager.startMonitoring()
+            } else {
+                Log.w("MainActivity", "⚠️ Bluetooth not available, cannot start geofence monitoring")
+                viewModel.showToast("Please enable Bluetooth to use geofence feature")
+            }
+        } else {
+            val deniedPermissions = permissionHelper.getDeniedPermissionNames()
+            Log.w("MainActivity", "⚠️ Some permissions not granted: ${deniedPermissions.joinToString(", ")}")
+        }
     }
 
     override fun onPause() {
         viewModel.activityOnPause()
+        // Stop geofence monitoring when paused to save battery
+        // Note: Do not clear discovered Beacon data to avoid false "exit geofence" when resuming
+        geofenceManager.stopMonitoring()
         super.onPause()
     }
 
@@ -723,6 +823,79 @@ class MainActivity : AppCompatActivity() {
             Log.d("MainActivity", "✅ All broadcast receivers unregistered")
         } catch (e: Exception) {
             Log.e("MainActivity", "❌ Failed to unregister a receiver", e)
+        }
+    }
+    
+    /**
+     * Update foreground service notification status
+     */
+    private fun updateForegroundServiceStatus() {
+        ThinkletForegroundService.updateStatus(
+            context = this,
+            isStreaming = viewModel.isStreaming.value,
+            isRecording = viewModel.isRecording.value,
+            deviceId = statusReportingManager.deviceId
+        )
+    }
+    
+    /**
+     * Handle commands passed from Intent (from foreground service or other sources)
+     */
+    private fun handleCommandFromIntent(intent: Intent?) {
+        if (intent == null) return
+        
+        val fromService = intent.getBooleanExtra("from_service", false)
+        val commandAction = intent.getStringExtra("command_action")
+        val action = intent.getStringExtra("action")
+        
+        if (!fromService) {
+            // Not a command forwarded from service, skip
+            return
+        }
+        
+        Log.i("MainActivity", "📥 Handling command from service: $commandAction, action: $action")
+        
+        when (commandAction) {
+            "streaming-control" -> {
+                when (action) {
+                    "start" -> {
+                        if (!viewModel.isStreaming.value) {
+                            viewModel.maybeStartStreaming { isStreamingStarted ->
+                                if (!isStreamingStarted) {
+                                    vibrator.vibrate(createStaccatoVibrationEffect(2))
+                                }
+                            }
+                        }
+                    }
+                    "stop" -> {
+                        if (viewModel.isStreaming.value) {
+                            viewModel.stopStreaming()
+                        }
+                    }
+                }
+            }
+            "recording-control" -> {
+                when (action) {
+                    "start" -> {
+                        viewModel.startRecording { isRecordingStarted ->
+                            if (isRecordingStarted) {
+                                vibrator.vibrate(createStaccatoVibrationEffect(1))
+                            } else {
+                                vibrator.vibrate(createStaccatoVibrationEffect(3))
+                            }
+                        }
+                    }
+                    "stop" -> {
+                        viewModel.stopRecording { isStopInitiated ->
+                            if (isStopInitiated) {
+                                vibrator.vibrate(createStaccatoVibrationEffect(2))
+                            } else {
+                                vibrator.vibrate(createStaccatoVibrationEffect(3))
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 }

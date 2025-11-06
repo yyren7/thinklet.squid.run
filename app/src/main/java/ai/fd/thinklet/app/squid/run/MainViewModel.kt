@@ -1080,7 +1080,7 @@ class MainViewModel(
                 StreamingEvent("Failed to stop recording: ${e.message}")
             )
             _isRecording.value = false
-            // 即使失败，也延迟一下再检查资源释放
+            // Even if failed, delay a bit before checking resource release
             viewModelScope.launch {
                 delay(500)
                 checkAndReleaseCamera()

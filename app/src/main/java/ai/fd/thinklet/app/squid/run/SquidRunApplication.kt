@@ -49,11 +49,16 @@ class SquidRunApplication : Application(), ViewModelStoreOwner {
         // We can trigger the creation here if we want it to start immediately with the app.
         statusReportingManager
 
-        // Announce at the Application level to ensure it's spoken only once per application lifecycle.
-        GlobalScope.launch {
-            ttsManager.ttsReady.first { it }
+        // ⚠️ Important: Immediately trigger TTS initialization in background thread to avoid ANR when first called on main thread
+        GlobalScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+            // Trigger lazy initialization (on IO thread)
+            val tts = ttsManager
+            Log.i("SquidRunApplication", "🔄 TTS initialization triggered in background thread")
+            
+            // Wait for initialization to complete
+            tts.ttsReady.first { it }
             Log.i("SquidRunApplication", "✅ TTS ready, announcing application prepared")
-            ttsManager.speakApplicationPrepared()
+            tts.speakApplicationPrepared()
         }
     }
 
@@ -62,12 +67,48 @@ class SquidRunApplication : Application(), ViewModelStoreOwner {
         SherpaOnnxTTSManager(applicationContext)
     }
 
+    // Lazy initialization of BeaconScannerManager for iBeacon scanning
+    val beaconScannerManager: BeaconScannerManager by lazy {
+        BeaconScannerManager(applicationContext)
+    }
+
+    // Lazy initialization of GeofenceManager for electronic geofencing
+    val geofenceManager: GeofenceManager by lazy {
+        GeofenceManager(applicationContext, beaconScannerManager).also {
+            // Add example geofence zones (can be configured according to actual needs)
+            // Here we add an example geofence, you can configure it according to actual iBeacon device information
+            Log.i("GeofenceManager", "📍 Initializing geofence zones...")
+            
+            // Configure geofence zone
+            // Based on actual Beacon device info: UUID=E2C56DB5-DFFB-48D2-B060-D0F5A71096E0, Major=0, Minor=0
+            val zone1 = GeofenceZone(
+                id = "zone_1",
+                name = "Geofence Zone 1",
+                beaconUuid = "E2C56DB5-DFFB-48D2-B060-D0F5A71096E0",
+                beaconMajor = 0,  // Actual Beacon Major value
+                beaconMinor = 0,  // Actual Beacon Minor value
+                radiusMeters = 10.0,
+                enabled = true
+            )
+            it.addGeofenceZone(zone1)
+            
+            Log.i("GeofenceManager", "✅ GeofenceManager initialized")
+        }
+    }
+
     override fun onTerminate() {
         // This is where we would stop the StatusReportingManager
         // when the application is terminating.
+        Log.i("SquidRunApplication", "🛑 Application terminating, stopping all services")
+        
+        // Stop foreground service
+        ThinkletForegroundService.stop(applicationContext)
+        
         statusReportingManager.stop()
         networkManager.unregisterCallback() // Unregister network callback
         ttsManager.shutdown()  // Call the same shutdown method
+        geofenceManager.cleanup() // Cleanup geofence manager
+        beaconScannerManager.cleanup() // Cleanup beacon scanner
         super.onTerminate()
     }
 }

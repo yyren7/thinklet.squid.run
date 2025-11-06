@@ -24,7 +24,15 @@ class PermissionHelper(private val activity: Activity) {
             Manifest.permission.RECORD_AUDIO,
             Manifest.permission.READ_PHONE_STATE,
             Manifest.permission.WRITE_EXTERNAL_STORAGE
-                .takeIf { Build.VERSION.SDK_INT <= Build.VERSION_CODES.P }
+                .takeIf { Build.VERSION.SDK_INT <= Build.VERSION_CODES.P },
+            // Permissions required for iBeacon geofence
+            Manifest.permission.ACCESS_FINE_LOCATION,
+            Manifest.permission.ACCESS_COARSE_LOCATION,
+            // Bluetooth permissions required for Android 12+ (API 31+)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) 
+                Manifest.permission.BLUETOOTH_SCAN else null,
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) 
+                Manifest.permission.BLUETOOTH_CONNECT else null
         )
     }
     
@@ -78,6 +86,10 @@ class PermissionHelper(private val activity: Activity) {
             Manifest.permission.RECORD_AUDIO -> "Microphone"
             Manifest.permission.WRITE_EXTERNAL_STORAGE -> "Storage"
             Manifest.permission.READ_PHONE_STATE -> "Phone State (for Device ID)"
+            Manifest.permission.ACCESS_FINE_LOCATION -> "Location (for iBeacon Geofence)"
+            Manifest.permission.ACCESS_COARSE_LOCATION -> "Coarse Location"
+            "android.permission.BLUETOOTH_SCAN" -> "Bluetooth Scan (for iBeacon)"
+            "android.permission.BLUETOOTH_CONNECT" -> "Bluetooth Connect"
             else -> permission
         }
     }

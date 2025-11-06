@@ -378,7 +378,7 @@
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
                         android:orientation="horizontal"
-                        android:layout_marginBottom="16dp">
+                        android:layout_marginBottom="8dp">
                         <TextView
                             android:id="@+id/label_preview_active"
                             android:layout_width="wrap_content"
@@ -391,6 +391,26 @@
                             android:layout_height="wrap_content"
                             android:layout_marginStart="4dp"
                             tools:text="false" />
+                    </LinearLayout>
+
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:orientation="horizontal"
+                        android:layout_marginBottom="16dp">
+                        <TextView
+                            android:id="@+id/label_geofence_status"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="Geofence: "
+                            android:textAppearance="@style/TextAppearance.MaterialComponents.Body1"/>
+                        <TextView
+                            android:id="@+id/geofence_status"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:layout_marginStart="4dp"
+                            android:text="OUTSIDE"
+                            tools:text="INSIDE" />
                     </LinearLayout>
 
                     <Button
