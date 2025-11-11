@@ -36,6 +36,10 @@
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" android:minSdkVersion="33" />
 
+    <!-- Logcat logging permission -->
+    <!-- Note: READ_LOGS requires system signature on Android 4.1+, but we can still capture app's own logs -->
+    <uses-permission android:name="android.permission.READ_LOGS" />
+
     <application
         android:name=".SquidRunApplication"
         android:allowBackup="true"

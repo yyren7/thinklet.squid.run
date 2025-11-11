@@ -1,7 +1,9 @@
 package ai.fd.thinklet.app.squid.run
 
+import android.app.Activity
 import android.app.Application
 import android.content.Context
+import android.os.Bundle
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.ViewModelStore
 import androidx.lifecycle.ViewModelStoreOwner
@@ -13,6 +15,13 @@ import android.util.Log
 class SquidRunApplication : Application(), ViewModelStoreOwner {
     override val viewModelStore: ViewModelStore by lazy {
         ViewModelStore()
+    }
+    
+    companion object {
+        // Track if MainActivity is currently in foreground
+        @Volatile
+        var isMainActivityInForeground = false
+            private set
     }
 
     // Lazy initialization of NetworkManager
@@ -42,8 +51,50 @@ class SquidRunApplication : Application(), ViewModelStoreOwner {
         }
     }
 
+    // Lazy initialization of LogcatLogger for system log capture
+    // Note: start() should be called after permissions are granted
+    val logcatLogger: LogcatLogger by lazy {
+        LogcatLogger.getInstance(applicationContext)
+    }
+
     override fun onCreate() {
         super.onCreate()
+        
+        // Register ActivityLifecycleCallbacks to track MainActivity state
+        registerActivityLifecycleCallbacks(object : ActivityLifecycleCallbacks {
+            override fun onActivityCreated(activity: Activity, savedInstanceState: Bundle?) {}
+            override fun onActivityStarted(activity: Activity) {
+                if (activity is MainActivity) {
+                    isMainActivityInForeground = true
+                    Log.d("SquidRunApplication", "📱 MainActivity started (foreground)")
+                }
+            }
+            override fun onActivityResumed(activity: Activity) {
+                if (activity is MainActivity) {
+                    isMainActivityInForeground = true
+                    Log.d("SquidRunApplication", "📱 MainActivity resumed (foreground)")
+                }
+            }
+            override fun onActivityPaused(activity: Activity) {
+                if (activity is MainActivity) {
+                    isMainActivityInForeground = false
+                    Log.d("SquidRunApplication", "📱 MainActivity paused (background)")
+                }
+            }
+            override fun onActivityStopped(activity: Activity) {
+                if (activity is MainActivity) {
+                    isMainActivityInForeground = false
+                    Log.d("SquidRunApplication", "📱 MainActivity stopped (background)")
+                }
+            }
+            override fun onActivitySaveInstanceState(activity: Activity, outState: Bundle) {}
+            override fun onActivityDestroyed(activity: Activity) {}
+        })
+        Log.i("SquidRunApplication", "✅ ActivityLifecycleCallbacks registered")
+        
+        // Note: LogcatLogger initialization is deferred until permissions are granted
+        // It will be started in MainActivity.onRequestPermissionsResult() after permissions are granted
+        
         // The StatusReportingManager is lazily initialized,
         // so it will be created and started the first time it is accessed.
         // We can trigger the creation here if we want it to start immediately with the app.
@@ -109,6 +160,7 @@ class SquidRunApplication : Application(), ViewModelStoreOwner {
         ttsManager.shutdown()  // Call the same shutdown method
         geofenceManager.cleanup() // Cleanup geofence manager
         beaconScannerManager.cleanup() // Cleanup beacon scanner
+        logcatLogger.stop() // Stop logcat logger
         super.onTerminate()
     }
 }

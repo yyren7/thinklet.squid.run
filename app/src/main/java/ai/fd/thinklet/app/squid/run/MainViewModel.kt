@@ -962,20 +962,46 @@ class MainViewModel(
                                 // Crucial: Delay execution to ensure the underlying MediaMuxer has fully flushed data to disk.
                                 viewModelScope.launch(Dispatchers.IO) {
                                     try {
-                                        // Wait for 1 second to ensure the file is completely written to disk.
-                                        // MediaMuxer and the file system may need time to complete the final write operations.
-                                        delay(1000)
+                                        // Wait for file size to stabilize before calculating MD5
+                                        // This ensures MediaMuxer and file system have completed all write operations
+                                        Log.i("MainViewModel", "Waiting for file to stabilize: ${recordFile.name}")
                                         
-                                        // Verify that the file exists and has a reasonable size.
-                                        if (!recordFile.exists()) {
-                                            Log.e("MainViewModel", "Recording file does not exist: ${recordFile.name}")
-                                            return@launch
+                                        var previousSize = 0L
+                                        var stableCount = 0
+                                        val maxWaitTime = 30000L // Maximum wait time: 30 seconds
+                                        val startTime = System.currentTimeMillis()
+                                        
+                                        while (stableCount < 3 && (System.currentTimeMillis() - startTime) < maxWaitTime) {
+                                            if (!recordFile.exists()) {
+                                                Log.e("MainViewModel", "Recording file does not exist: ${recordFile.name}")
+                                                return@launch
+                                            }
+                                            
+                                            val currentSize = recordFile.length()
+                                            
+                                            if (currentSize == previousSize && currentSize > 0) {
+                                                stableCount++
+                                                Log.d("MainViewModel", "File size stable (${stableCount}/3): ${currentSize} bytes")
+                                            } else {
+                                                stableCount = 0
+                                                Log.d("MainViewModel", "File size changed: $previousSize -> $currentSize bytes")
+                                            }
+                                            
+                                            previousSize = currentSize
+                                            delay(1000) // Check every second
                                         }
                                         
                                         val fileSize = recordFile.length()
-                                        if (fileSize < 1024) { // File is smaller than 1KB, likely problematic.
+                                        val waitedTime = System.currentTimeMillis() - startTime
+                                        
+                                        if (stableCount < 3) {
+                                            Log.w("MainViewModel", "File size did not stabilize after ${waitedTime}ms, proceeding anyway")
+                                        } else {
+                                            Log.i("MainViewModel", "File size stabilized after ${waitedTime}ms at ${fileSize} bytes")
+                                        }
+                                        
+                                        if (fileSize < 1024) {
                                             Log.w("MainViewModel", "Recording file size is too small (${fileSize} bytes): ${recordFile.name}")
-                                            // Continue calculating MD5 even if the file is small, but log a warning.
                                         }
                                         
                                         Log.i("MainViewModel", "Starting MD5 calculation for file: ${recordFile.name} (${fileSize} bytes)")

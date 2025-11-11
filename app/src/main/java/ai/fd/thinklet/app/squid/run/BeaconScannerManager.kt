@@ -181,6 +181,12 @@ class BeaconScannerManager(private val context: Context) {
     private val maxRegistrationRetries = 3
     private var lastRegistrationFailureTime = 0L
     
+    // Track if callback is currently registered
+    private var isCallbackRegistered = false
+    
+    // Retry job tracking
+    private var retryRunnable: Runnable? = null
+    
     // Scan callback
     private val scanCallback: ScanCallback = object : ScanCallback() {
         override fun onScanResult(callbackType: Int, result: ScanResult?) {
@@ -235,26 +241,27 @@ class BeaconScannerManager(private val context: Context) {
                 registrationFailureCount++
                 lastRegistrationFailureTime = System.currentTimeMillis()
                 
-                Log.w(TAG, "⚠️ Application registration failed (attempt $registrationFailureCount/$maxRegistrationRetries), cleaning up and will retry...")
+                Log.w(TAG, "⚠️ Application registration failed (attempt $registrationFailureCount/$maxRegistrationRetries), performing deep cleanup...")
                 
-                // Force cleanup
-                isScanning = false
-                try {
-                    bluetoothLeScanner?.stopScan(this)
-                } catch (e: Exception) {
-                    Log.w(TAG, "⚠️ Error stopping scan during cleanup: ${e.message}")
-                }
-                bluetoothLeScanner = null
+                // Perform deep cleanup to release GATT resources
+                performDeepCleanup()
                 
-                // Retry with backoff if not exceeded max retries
+                // Retry with exponential backoff if not exceeded max retries
                 if (registrationFailureCount < maxRegistrationRetries) {
-                    val retryDelay = 1000L * registrationFailureCount // 1s, 2s, 3s
+                    val retryDelay = 2000L * registrationFailureCount // 2s, 4s, 6s (longer delays to allow system cleanup)
                     Log.d(TAG, "🔄 Retrying scan after ${retryDelay}ms...")
-                    handler.postDelayed({
+                    
+                    // Cancel any existing retry
+                    retryRunnable?.let { handler.removeCallbacks(it) }
+                    
+                    retryRunnable = Runnable {
+                        Log.d(TAG, "🔄 Executing retry attempt $registrationFailureCount...")
                         startScanning()
-                    }, retryDelay)
+                    }
+                    handler.postDelayed(retryRunnable!!, retryDelay)
                 } else {
                     Log.e(TAG, "❌ Max registration retries reached, giving up. Please restart the app or reset Bluetooth.")
+                    Log.e(TAG, "💡 Suggestion: Close other apps using Bluetooth, or toggle Bluetooth off/on in system settings.")
                 }
             }
             
@@ -306,25 +313,33 @@ class BeaconScannerManager(private val context: Context) {
         // Check if too many registration failures in short time
         val currentTime = System.currentTimeMillis()
         if (registrationFailureCount >= maxRegistrationRetries && 
-            currentTime - lastRegistrationFailureTime < 30000) { // 30 seconds
-            Log.w(TAG, "⚠️ Too many registration failures ($registrationFailureCount), waiting before retry...")
-            // Schedule retry after delay
+            currentTime - lastRegistrationFailureTime < 60000) { // 60 seconds cooldown
+            Log.w(TAG, "⚠️ Too many registration failures ($registrationFailureCount), in cooldown period...")
+            Log.w(TAG, "   Time since last failure: ${(currentTime - lastRegistrationFailureTime) / 1000}s / 60s")
+            
+            // Schedule retry after cooldown
+            val remainingCooldown = 60000 - (currentTime - lastRegistrationFailureTime)
             handler.postDelayed({
+                Log.i(TAG, "🔄 Cooldown period ended, resetting failure count...")
                 registrationFailureCount = 0
                 startScanning()
-            }, 10000) // 10 seconds
+            }, remainingCooldown)
             return
         }
         
-        // Force stop any existing scan before starting new one
-        try {
-            if (bluetoothLeScanner != null) {
-                Log.d(TAG, "🧹 Cleaning up existing scanner before starting new scan")
-                bluetoothLeScanner?.stopScan(scanCallback)
-                bluetoothLeScanner = null
-            }
-        } catch (e: Exception) {
-            Log.w(TAG, "⚠️ Error cleaning up existing scanner: ${e.message}")
+        // Cancel any pending retry tasks
+        retryRunnable?.let { 
+            handler.removeCallbacks(it)
+            retryRunnable = null
+        }
+        
+        // Perform deep cleanup before starting
+        if (isCallbackRegistered || bluetoothLeScanner != null) {
+            Log.d(TAG, "🧹 Cleaning up existing scanner before starting new scan (callback registered: $isCallbackRegistered)")
+            performDeepCleanup()
+            
+            // Wait a moment for cleanup to complete
+            Thread.sleep(100)
         }
         
         bluetoothLeScanner = bluetoothAdapter?.bluetoothLeScanner
@@ -350,9 +365,15 @@ class BeaconScannerManager(private val context: Context) {
         try {
             bluetoothLeScanner?.startScan(scanFilters, scanSettings, scanCallback)
             isScanning = true
+            isCallbackRegistered = true
             scanStartTime = System.currentTimeMillis()
             scanCount = 0
+            
+            // Reset failure count on successful start
+            registrationFailureCount = 0
+            
             Log.i(TAG, "✅ Started iBeacon scanning (with ${scanFilters.size} filters)")
+            Log.i(TAG, "   Scanner state: scanning=$isScanning, callback_registered=$isCallbackRegistered")
             
             // Start periodic Beacon timeout check
             scheduleBeaconTimeoutCheck()
@@ -362,9 +383,13 @@ class BeaconScannerManager(private val context: Context) {
         } catch (e: SecurityException) {
             Log.e(TAG, "❌ SecurityException: Missing Bluetooth or Location permission", e)
             isScanning = false
+            isCallbackRegistered = false
+            performDeepCleanup()
         } catch (e: Exception) {
             Log.e(TAG, "❌ Failed to start scanning", e)
             isScanning = false
+            isCallbackRegistered = false
+            performDeepCleanup()
         }
     }
     
@@ -373,22 +398,27 @@ class BeaconScannerManager(private val context: Context) {
      */
     @SuppressLint("MissingPermission")
     fun stopScanning() {
-        if (!isScanning) {
+        Log.d(TAG, "🛑 Stopping scan... (scanning=$isScanning, callback_registered=$isCallbackRegistered)")
+        
+        if (!isScanning && !isCallbackRegistered) {
             Log.d(TAG, "ℹ️ Not currently scanning")
             // Still try to cleanup in case of inconsistent state
-            try {
-                bluetoothLeScanner?.stopScan(scanCallback)
-                bluetoothLeScanner = null
-            } catch (e: Exception) {
-                Log.w(TAG, "⚠️ Error during cleanup: ${e.message}")
-            }
+            performDeepCleanup()
             return
         }
         
         try {
-            bluetoothLeScanner?.stopScan(scanCallback)
+            if (isCallbackRegistered) {
+                bluetoothLeScanner?.stopScan(scanCallback)
+                isCallbackRegistered = false
+                Log.d(TAG, "✅ Unregistered scan callback")
+            }
+            
             isScanning = false
+            
+            // Cancel all scheduled tasks
             handler.removeCallbacksAndMessages(null)
+            retryRunnable = null
             
             // Release scanner reference to allow GC
             bluetoothLeScanner = null
@@ -402,17 +432,56 @@ class BeaconScannerManager(private val context: Context) {
                 Log.i(TAG, "🛑 Stopped iBeacon scanning")
             }
             
-            // Reset statistics and failure count
+            // Reset statistics but preserve failure count for rate limiting
             scanStartTime = 0
             scanCount = 0
             ibeaconCount = 0
             otherDeviceCount = 0
-            registrationFailureCount = 0
         } catch (e: Exception) {
             Log.e(TAG, "❌ Failed to stop scanning", e)
             // Ensure scanner is released even on error
+            performDeepCleanup()
+        }
+    }
+    
+    /**
+     * Perform deep cleanup to release all GATT resources
+     * This is critical when handling SCAN_FAILED_APPLICATION_REGISTRATION_FAILED
+     */
+    @SuppressLint("MissingPermission")
+    private fun performDeepCleanup() {
+        Log.d(TAG, "🧹 Performing deep cleanup...")
+        
+        try {
+            // Stop scan if callback is registered
+            if (isCallbackRegistered) {
+                bluetoothLeScanner?.stopScan(scanCallback)
+                isCallbackRegistered = false
+                Log.d(TAG, "   ✓ Unregistered scan callback")
+            }
+            
+            // Cancel all scheduled tasks
+            handler.removeCallbacksAndMessages(null)
+            retryRunnable = null
+            Log.d(TAG, "   ✓ Cancelled all scheduled tasks")
+            
+            // Release scanner reference
             bluetoothLeScanner = null
+            Log.d(TAG, "   ✓ Released scanner reference")
+            
+            // Reset scanning state
             isScanning = false
+            
+            // Give system time to cleanup
+            Thread.sleep(50)
+            
+            Log.d(TAG, "✅ Deep cleanup completed")
+        } catch (e: Exception) {
+            Log.e(TAG, "❌ Error during deep cleanup: ${e.message}", e)
+            // Force reset state even on error
+            isCallbackRegistered = false
+            isScanning = false
+            bluetoothLeScanner = null
         }
     }
     
@@ -653,16 +722,14 @@ class BeaconScannerManager(private val context: Context) {
      */
     fun cleanup() {
         Log.i(TAG, "🧹 Cleaning up BeaconScannerManager...")
+        
+        // Stop scanning first
         stopScanning()
         
-        // Force release scanner
-        try {
-            bluetoothLeScanner?.stopScan(scanCallback)
-        } catch (e: Exception) {
-            Log.w(TAG, "⚠️ Error during final cleanup: ${e.message}")
-        }
-        bluetoothLeScanner = null
+        // Perform deep cleanup to ensure all resources are released
+        performDeepCleanup()
         
+        // Clear all data structures
         listeners.clear()
         discoveredBeacons.clear()
         distanceFilters.clear()
@@ -670,7 +737,11 @@ class BeaconScannerManager(private val context: Context) {
         
         // Reset all counters
         registrationFailureCount = 0
-        isScanning = false
+        lastRegistrationFailureTime = 0
+        scanStartTime = 0
+        scanCount = 0
+        ibeaconCount = 0
+        otherDeviceCount = 0
         
         Log.i(TAG, "✅ BeaconScannerManager cleanup completed")
     }

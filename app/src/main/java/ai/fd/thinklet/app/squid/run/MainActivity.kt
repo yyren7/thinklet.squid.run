@@ -104,56 +104,9 @@ class MainActivity : AppCompatActivity() {
     private var lastCameraClickTime = 0L
     private val CAMERA_CLICK_DEBOUNCE_MS = 1000
 
-    private val streamingControlReceiver = object : BroadcastReceiver() {
-        override fun onReceive(context: Context?, intent: Intent?) {
-            when (intent?.getStringExtra("action")) {
-                "start" -> {
-                    if (!viewModel.isStreaming.value) {
-                        viewModel.maybeStartStreaming { isStreamingStarted ->
-                            if (!isStreamingStarted) {
-                                vibrator.vibrate(createStaccatoVibrationEffect(2))
-                            }
-                        }
-                    }
-                }
-                "stop" -> {
-                    if (viewModel.isStreaming.value) {
-                        viewModel.stopStreaming()
-                    }
-                }
-            }
-        }
-    }
-
-    private val recordingControlReceiver = object : BroadcastReceiver() {
-        override fun onReceive(context: Context?, intent: Intent?) {
-            when (intent?.getStringExtra("action")) {
-                "start" -> {
-                    // Remove checks from MainActivity layer, unify handling in ViewModel layer.
-                    // ViewModel's concurrency protection will handle repeated requests.
-                    viewModel.startRecording { isRecordingStarted ->
-                        if (isRecordingStarted) {
-                            vibrator.vibrate(createStaccatoVibrationEffect(1))
-                        } else {
-                            vibrator.vibrate(createStaccatoVibrationEffect(3))
-                        }
-                    }
-                }
-                "stop" -> {
-                    // Remove checks from MainActivity layer, unify handling in ViewModel layer.
-                    // ViewModel will check the status and log appropriately.
-                    viewModel.stopRecording { isStopInitiated ->
-                        if (isStopInitiated) {
-                            vibrator.vibrate(createStaccatoVibrationEffect(2))
-                        } else {
-                            // Use different vibration feedback for stop failure or not recording.
-                            vibrator.vibrate(createStaccatoVibrationEffect(3))
-                        }
-                    }
-                }
-            }
-        }
-    }
+    // Note: streamingControlReceiver and recordingControlReceiver removed.
+    // Commands are now handled exclusively through ThinkletForegroundService which forwards
+    // them to MainActivity via Intent (onNewIntent). This prevents duplicate command processing.
 
     private val serverConnectionReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
@@ -202,8 +155,11 @@ class MainActivity : AppCompatActivity() {
             if (pkg != myPkg || cls != myCls) {
                 ext.configure(myPkg, myCls)
             }
-            if (!ext.isAutoLaunchMode()) {
-                ext.enableAutoLaunchMode()
+            // After app launched, disable auto-launch mode
+            // (It will be re-enabled before shutdown to ensure auto-start on next boot)
+            if (ext.isAutoLaunchMode()) {
+                ext.disableAutoLaunchMode()
+                Log.i("ThinkletExtension", "Auto-launch mode disabled after app started")
             }
         } catch (e: Exception) {
             Log.e("ThinkletExtension", "Failed to configure auto-launch", e)
@@ -472,9 +428,18 @@ class MainActivity : AppCompatActivity() {
         maybeNotifyLaunchErrors()
         viewModel.activityOnResume()
         
-        // If permissions are granted, start geofence monitoring
+        // If permissions are granted, start geofence monitoring and LogcatLogger
         if (permissionHelper.areAllPermissionsGranted()) {
             Log.i("MainActivity", "✅ All permissions granted, starting geofence monitoring")
+            
+            // Start LogcatLogger if not already started (e.g., app restarted with permissions already granted)
+            try {
+                val logger = (application as SquidRunApplication).logcatLogger
+                // Check if logger is already running by trying to start it (start() handles already-running case)
+                logger.start()
+            } catch (e: Exception) {
+                Log.e("MainActivity", "Failed to start LogcatLogger in onResume", e)
+            }
             
             // Check if Bluetooth is available
             val beaconScanner = (application as SquidRunApplication).beaconScannerManager
@@ -492,9 +457,10 @@ class MainActivity : AppCompatActivity() {
 
     override fun onPause() {
         viewModel.activityOnPause()
-        // Stop geofence monitoring when paused to save battery
-        // Note: Do not clear discovered Beacon data to avoid false "exit geofence" when resuming
-        geofenceManager.stopMonitoring()
+        // Keep geofence monitoring running in background (protected by Foreground Service)
+        // Geofence and BLE features should continue working even when app is in background
+        // Note: Foreground Service ensures app won't be killed and BLE can run in background
+        // geofenceManager.stopMonitoring()  // Removed: keep monitoring in background
         super.onPause()
     }
 
@@ -587,7 +553,18 @@ class MainActivity : AppCompatActivity() {
         // 3. Send offline status and prepare for shutdown
         statusReportingManager.sendOfflineStatusAndStop()
 
-        // 4. Execute shutdown
+        // 4. Enable auto-launch mode before shutdown (so app will auto-start on next boot)
+        try {
+            val ext = Extension()
+            if (!ext.isAutoLaunchMode()) {
+                ext.enableAutoLaunchMode()
+                Log.i("ThinkletExtension", "Auto-launch mode enabled before shutdown")
+            }
+        } catch (e: Exception) {
+            Log.e("ThinkletExtension", "Failed to enable auto-launch before shutdown", e)
+        }
+
+        // 5. Execute shutdown
         PowerController().shutdown(this, wait = 1000 /* max wait 1s */)
     }
 
@@ -753,6 +730,16 @@ class MainActivity : AppCompatActivity() {
             if (grantResults.isNotEmpty() && grantResults.all { it == PackageManager.PERMISSION_GRANTED }) {
                 // All permissions have been granted.
                 binding.permissionGranted.text = "true"
+                
+                // Start LogcatLogger after permissions are granted
+                try {
+                    val logger = (application as SquidRunApplication).logcatLogger
+                    logger.start()
+                    Log.i("MainActivity", "✅ LogcatLogger started after permissions granted")
+                } catch (e: Exception) {
+                    Log.e("MainActivity", "Failed to start LogcatLogger", e)
+                }
+                
                 // Do not automatically initialize the camera; wait for the user to take action (stream/record/preview).
             } else {
                 // Some permissions were denied.
@@ -808,17 +795,17 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun setupReceivers() {
-        LocalBroadcastManager.getInstance(this).registerReceiver(streamingControlReceiver, IntentFilter("streaming-control"))
-        LocalBroadcastManager.getInstance(this).registerReceiver(recordingControlReceiver, IntentFilter("recording-control"))
-
+        // Note: recording-control and streaming-control receivers removed from MainActivity
+        // because ThinkletForegroundService already handles these broadcasts and forwards
+        // commands to MainActivity via Intent. This prevents duplicate command processing.
+        // Only keep serverConnectionReceiver for server disconnection events.
         val serverConnectionFilter = IntentFilter(StatusReportingManager.ACTION_SERVER_DISCONNECTED)
         LocalBroadcastManager.getInstance(this).registerReceiver(serverConnectionReceiver, serverConnectionFilter)
     }
 
     private fun unregisterReceivers() {
         try {
-            LocalBroadcastManager.getInstance(this).unregisterReceiver(streamingControlReceiver)
-            LocalBroadcastManager.getInstance(this).unregisterReceiver(recordingControlReceiver)
+            // Only unregister serverConnectionReceiver since others were removed
             LocalBroadcastManager.getInstance(this).unregisterReceiver(serverConnectionReceiver)
             Log.d("MainActivity", "✅ All broadcast receivers unregistered")
         } catch (e: Exception) {

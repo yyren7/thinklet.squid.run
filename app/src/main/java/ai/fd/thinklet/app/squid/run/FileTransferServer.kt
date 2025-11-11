@@ -60,6 +60,7 @@ class FileTransferServer(
                 uri == "/files" && session.method == Method.GET -> handleFileList(session)
                 uri.startsWith("/download/") && session.method == Method.GET -> handleDownload(uri, session)
                 uri.startsWith("/delete/") && session.method == Method.DELETE -> handleDelete(uri)
+                uri.startsWith("/recalculate-md5/") && session.method == Method.POST -> handleRecalculateMD5(uri)
                 else -> newFixedLengthResponse(Response.Status.NOT_FOUND, MIME_PLAINTEXT, "Not Found")
             }
         } catch (e: java.net.SocketException) {
@@ -415,6 +416,83 @@ class FileTransferServer(
                 Response.Status.NOT_FOUND,
                 "application/json",
                 gson.toJson(mapOf("success" to false, "error" to "File not found or failed to delete"))
+            )
+        }
+    }
+
+    /**
+     * Recalculate MD5 for a file.
+     * API: POST /recalculate-md5/{filename}
+     * This is used when PC side detects MD5 mismatch and wants to verify if the file is actually correct.
+     * Response: {"success": true, "md5": "hash_string", "size": file_size}
+     */
+    private fun handleRecalculateMD5(uri: String): Response {
+        val filename = uri.substringAfter("/recalculate-md5/")
+        
+        // Search for file in all recording folders
+        val allRecordingFolders = storageManager.getAllRecordingFolders()
+        var file: File? = null
+        
+        for (folder in allRecordingFolders) {
+            val candidateFile = File(folder, filename)
+            if (candidateFile.exists() && candidateFile.isFile) {
+                file = candidateFile
+                break
+            }
+        }
+        
+        if (file == null) {
+            return newFixedLengthResponse(
+                Response.Status.NOT_FOUND,
+                "application/json",
+                gson.toJson(mapOf("success" to false, "error" to "File not found"))
+            )
+        }
+        
+        return try {
+            Log.i(TAG, "Recalculating MD5 for file: ${file.name}")
+            val startTime = System.currentTimeMillis()
+            
+            // Recalculate MD5 using the same method as initial calculation
+            val md5 = MD5Utils.calculateFileMD5(file)
+            val fileSize = file.length()
+            
+            val calculationTime = System.currentTimeMillis() - startTime
+            Log.i(TAG, "MD5 recalculation completed in ${calculationTime}ms for: ${file.name}")
+            
+            if (md5.isEmpty()) {
+                return newFixedLengthResponse(
+                    Response.Status.INTERNAL_ERROR,
+                    "application/json",
+                    gson.toJson(mapOf("success" to false, "error" to "Failed to calculate MD5"))
+                )
+            }
+            
+            // Update the .md5 file with the new hash
+            val md5File = File(file.parent, "${file.name}.md5")
+            try {
+                md5File.writeText(md5)
+                Log.i(TAG, "MD5 file updated: ${md5File.name}")
+            } catch (e: Exception) {
+                Log.w(TAG, "Failed to update MD5 file, but returning calculated hash", e)
+                // Continue anyway, return the calculated hash
+            }
+            
+            newFixedLengthResponse(
+                Response.Status.OK,
+                "application/json",
+                gson.toJson(mapOf(
+                    "success" to true,
+                    "md5" to md5,
+                    "size" to fileSize
+                ))
+            )
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to recalculate MD5 for: ${file.name}", e)
+            newFixedLengthResponse(
+                Response.Status.INTERNAL_ERROR,
+                "application/json",
+                gson.toJson(mapOf("success" to false, "error" to "Failed to recalculate MD5: ${e.message}"))
             )
         }
     }

@@ -27,41 +27,41 @@ object MD5Utils {
             val samples = mutableListOf<Byte>()
             
             RandomAccessFile(file, "r").use { raf ->
-                // Sample from beginning
-                val beginSample = ByteArray(minOf(SAMPLE_SIZE, fileSize.toInt()))
-                raf.seek(0)
-                val beginRead = raf.read(beginSample)
-                if (beginRead > 0) {
-                    samples.addAll(beginSample.sliceArray(0 until beginRead).toList())
-                }
-                
-                // Sample from middle if file is large enough
-                if (fileSize > SAMPLE_SIZE * 2) {
-                    val middlePos = fileSize / 2
-                    val middleSample = ByteArray(SAMPLE_SIZE)
-                    raf.seek(middlePos)
-                    val middleRead = raf.read(middleSample)
-                    if (middleRead > 0) {
-                        samples.addAll(middleSample.sliceArray(0 until middleRead).toList())
+                // If file is smaller than SAMPLE_SIZE, just read the whole file
+                if (fileSize <= SAMPLE_SIZE && fileSize > 0) {
+                    val smallSample = ByteArray(fileSize.toInt())
+                    raf.seek(0)
+                    val smallRead = raf.read(smallSample)
+                    if (smallRead > 0) {
+                        samples.addAll(smallSample.sliceArray(0 until smallRead).toList())
                     }
-                }
-                
-                // Sample from end
-                if (fileSize > SAMPLE_SIZE) {
+                } else if (fileSize > SAMPLE_SIZE) {
+                    // Sample from beginning
+                    val beginSample = ByteArray(SAMPLE_SIZE)
+                    raf.seek(0)
+                    val beginRead = raf.read(beginSample)
+                    if (beginRead > 0) {
+                        samples.addAll(beginSample.sliceArray(0 until beginRead).toList())
+                    }
+                    
+                    // Sample from middle if file is large enough
+                    if (fileSize > SAMPLE_SIZE * 2) {
+                        val middlePos = fileSize / 2
+                        val middleSample = ByteArray(SAMPLE_SIZE)
+                        raf.seek(middlePos)
+                        val middleRead = raf.read(middleSample)
+                        if (middleRead > 0) {
+                            samples.addAll(middleSample.sliceArray(0 until middleRead).toList())
+                        }
+                    }
+                    
+                    // Sample from end
                     val endPos = maxOf(0, fileSize - SAMPLE_SIZE)
                     val endSample = ByteArray(SAMPLE_SIZE)
                     raf.seek(endPos)
                     val endRead = raf.read(endSample)
                     if (endRead > 0) {
                         samples.addAll(endSample.sliceArray(0 until endRead).toList())
-                    }
-                } else if (fileSize > 0) {
-                    // File is smaller than SAMPLE_SIZE, just read the whole file
-                    raf.seek(0)
-                    val smallSample = ByteArray(fileSize.toInt())
-                    val smallRead = raf.read(smallSample)
-                    if (smallRead > 0) {
-                        samples.addAll(smallSample.sliceArray(0 until smallRead).toList())
                     }
                 }
             }
