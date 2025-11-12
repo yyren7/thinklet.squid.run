@@ -110,15 +110,30 @@ class MainActivity : AppCompatActivity() {
 
     private val serverConnectionReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
-            if (intent?.action == StatusReportingManager.ACTION_SERVER_DISCONNECTED) {
-                // Only trigger auto-stop for SRT, as RTMP has its own TCP-based disconnection handling.
-                if (viewModel.streamProtocol.value == "srt") {
-                    Log.w("MainActivity", "Server disconnected (WebSocket failure) and protocol is SRT. Stopping stream.")
-                    if (viewModel.isStreaming.value) {
-                        viewModel.stopStreaming()
+            when (intent?.action) {
+                StatusReportingManager.ACTION_SERVER_DISCONNECTED -> {
+                    // Note: Both RTMP and SRT will trigger onDisconnect() callback which handles stopStreaming()
+                    // This broadcast is mainly for informational purposes and future enhancements
+                    Log.i("MainActivity", "Server disconnected (WebSocket failure). Stream disconnect will be handled by onDisconnect() callback.")
+                }
+                StatusReportingManager.ACTION_RECONNECT_STREAMING -> {
+                    // WebSocket reconnected and streaming was active - restart streaming
+                    Log.i("MainActivity", "🔄 WebSocket reconnected, restarting streaming (MediaMTX likely restarted)")
+                    lifecycleScope.launch {
+                        // Small delay to ensure MediaMTX is fully ready
+                        delay(500)
+                        
+                        // Stop existing streaming first to clean up stale connection
+                        if (viewModel.isStreaming.value) {
+                            Log.i("MainActivity", "Stopping stale streaming connection first")
+                            viewModel.stopStreaming()
+                            delay(1000)  // Wait for cleanup
+                        }
+                        
+                        // Restart streaming with camera preparation
+                        Log.i("MainActivity", "Restarting streaming with fresh connection")
+                        viewModel.maybeStartStreaming()
                     }
-                } else {
-                    Log.i("MainActivity", "Server disconnected (WebSocket failure), but protocol is RTMP. Letting RTMP handle disconnection.")
                 }
             }
         }
@@ -798,8 +813,11 @@ class MainActivity : AppCompatActivity() {
         // Note: recording-control and streaming-control receivers removed from MainActivity
         // because ThinkletForegroundService already handles these broadcasts and forwards
         // commands to MainActivity via Intent. This prevents duplicate command processing.
-        // Only keep serverConnectionReceiver for server disconnection events.
-        val serverConnectionFilter = IntentFilter(StatusReportingManager.ACTION_SERVER_DISCONNECTED)
+        // Only keep serverConnectionReceiver for server disconnection and reconnection events.
+        val serverConnectionFilter = IntentFilter().apply {
+            addAction(StatusReportingManager.ACTION_SERVER_DISCONNECTED)
+            addAction(StatusReportingManager.ACTION_RECONNECT_STREAMING)
+        }
         LocalBroadcastManager.getInstance(this).registerReceiver(serverConnectionReceiver, serverConnectionFilter)
     }
 

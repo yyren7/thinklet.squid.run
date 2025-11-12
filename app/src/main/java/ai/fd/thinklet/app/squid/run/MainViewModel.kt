@@ -93,8 +93,8 @@ class MainViewModel(
 
     /**
      * The complete stream URL, dynamically generated from server IP and protocol.
-     * RTMP: rtmp://ip:1935/thinklet.squid.run
-     * SRT: srt://ip:8890
+     * SRT (default): srt://ip:8890
+     * RTMP (fallback): rtmp://ip:1935/thinklet.squid.run
      */
     val streamUrl: StateFlow<String> = kotlinx.coroutines.flow.combine(
         _serverIp,
@@ -123,13 +123,13 @@ class MainViewModel(
             ?: savedIp
             ?: defaultIp
         
-        // Load protocol preference (default to rtmp for backward compatibility)
+        // Load protocol preference (default to SRT for better weak network performance)
         _streamProtocol.value = sharedPreferences.getString("streamProtocol", "srt") ?: "srt"
     }
 
     /**
      * Extract IP address from stream URL.
-     * Format: rtmp://IP:PORT/PATH or srt://IP:PORT
+     * Format: srt://IP:PORT or rtmp://IP:PORT/PATH (default: SRT)
      */
     private fun extractIpFromUrl(url: String): String? {
         return try {
@@ -641,14 +641,16 @@ class MainViewModel(
 
                 //
                 // Optimal SRT parameters for industrial weak network environments
-                // latency: (ms) Increased latency to allow more time for retransmission, crucial for reliability. 2-3 times the RTT is recommended.
+                // latency: (ms) Increased latency to allow more time for retransmission and mesh WiFi handover.
+                //   - 10000ms (10 seconds) allows seamless mesh router switching with extra margin
+                //   - Combined with PC-side adaptive playback rate, the stream will auto-catchup after network recovery
                 // maxbw: (bytes/s) Maximum bandwidth limit, set slightly above the total bitrate to prevent network congestion.
                 // smoother: Transmission smoothing algorithm to prevent data bursts.
                 //
                 val totalBitrateBps = videoBitrateBps + audioBitrateBps
                 val maxBwBytesPerSecond = (totalBitrateBps * 1.25 / 8).toLong() // Set maxbw to 125% of total bitrate, converted to bytes/s
 
-                "$currentStreamUrl?streamid=publish:thinklet.squid.run/$currentStreamKey&latency=3000&maxbw=$maxBwBytesPerSecond&smoother=live"
+                "$currentStreamUrl?streamid=publish:thinklet.squid.run/$currentStreamKey&latency=10000&maxbw=$maxBwBytesPerSecond&smoother=live"
             } else {
                 // RTMP format: rtmp://ip:port/path/key
                 "$currentStreamUrl/$currentStreamKey"
@@ -713,12 +715,18 @@ class MainViewModel(
     }
 
     fun stopStreaming() {
-        val streamSnapshot = stream ?: return
-        streamSnapshot.stopStream()
-        _isStreaming.value = false
-        _connectionStatus.value = ConnectionStatus.IDLE
-        // Check if camera resources need to be released
-        checkAndReleaseCamera()
+        val streamSnapshot = stream
+        try {
+            streamSnapshot?.stopStream()
+        } catch (e: Exception) {
+            Log.e("MainViewModel", "Error while stopping stream", e)
+        } finally {
+            // Always reset state even if stopStream() fails to ensure consistent state
+            _isStreaming.value = false
+            _connectionStatus.value = ConnectionStatus.IDLE
+            // Check if camera resources need to be released
+            checkAndReleaseCamera()
+        }
     }
 
     @MainThread

@@ -99,6 +99,9 @@ class StatusReportingManager(
     private var streamKey: String? = null
     var isRecording: Boolean = false
     var recordingDurationMs: Long = 0
+    
+    // Track streaming state before disconnect to determine if we should auto-reconnect
+    private var wasStreamingBeforeDisconnect: Boolean = false
     private val client = OkHttpClient.Builder()
         .pingInterval(10, TimeUnit.SECONDS)
         .build()
@@ -136,6 +139,7 @@ class StatusReportingManager(
     
     companion object {
         const val ACTION_SERVER_DISCONNECTED = "ai.fd.thinklet.app.squid.run.SERVER_DISCONNECTED"
+        const val ACTION_RECONNECT_STREAMING = "ai.fd.thinklet.app.squid.run.RECONNECT_STREAMING"
         private const val TAG = "StatusReportingManager"
         private const val NORMAL_REPORT_INTERVAL = 5000L  // 5 seconds
         private const val ACTIVE_REPORT_INTERVAL = 5000L   // 5 seconds
@@ -504,6 +508,16 @@ class StatusReportingManager(
                 
                 // Then start the periodic reporting timer.
                 startReportTimer()
+                
+                // 🔄 Auto-restart streaming if it was active before disconnect (e.g. PC MediaMTX restart)
+                // Use wasStreamingBeforeDisconnect flag instead of current isStreaming to avoid race conditions
+                if (wasStreamingBeforeDisconnect) {
+                    Log.i(TAG, "🔄 WebSocket reconnected and streaming was active before disconnect, notifying MainActivity to restart streaming")
+                    val intent = Intent(ACTION_RECONNECT_STREAMING)
+                    LocalBroadcastManager.getInstance(context).sendBroadcast(intent)
+                    // Reset the flag after triggering reconnect
+                    wasStreamingBeforeDisconnect = false
+                }
             }
 
             override fun onMessage(webSocket: WebSocket, text: String) {
@@ -523,6 +537,8 @@ class StatusReportingManager(
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
                 if (t is ConnectException || t is SocketTimeoutException) {
                     Log.e(TAG, "❌ WebSocket: Could not connect to server: ${t.message}")
+                    // Save streaming state before disconnect for auto-reconnect logic
+                    wasStreamingBeforeDisconnect = isStreaming
                     // Broadcast that the server is disconnected
                     val intent = Intent(ACTION_SERVER_DISCONNECTED)
                     LocalBroadcastManager.getInstance(context).sendBroadcast(intent)
@@ -542,6 +558,8 @@ class StatusReportingManager(
 
             override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
                 Log.d(TAG, "🔌 WebSocket connection closed: $reason")
+                // Save streaming state before disconnect for auto-reconnect logic
+                wasStreamingBeforeDisconnect = isStreaming
                 isConnecting = false
                 this@StatusReportingManager.webSocket = null
                 maybeReconnect()

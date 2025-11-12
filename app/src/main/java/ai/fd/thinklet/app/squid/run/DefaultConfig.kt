@@ -4,10 +4,16 @@ package ai.fd.thinklet.app.squid.run
  * Default configuration class.
  * Contains the default parameters used when the application starts,
  * avoiding the need to pass parameters via the command line every time.
+ * 
+ * Note: The actual streaming protocol (RTMP/SRT) is determined by SharedPreferences,
+ * defaulting to SRT (see MainViewModel initialization). The URL format below is 
+ * historical and will be converted based on the selected protocol.
  */
 object DefaultConfig {
     
-    // RTMP Server Configuration
+    // Server Configuration
+    // Note: This URL format is for reference only. Actual protocol (RTMP/SRT) defaults to SRT
+    // and is stored in SharedPreferences. The URL will be reconstructed based on protocol choice.
     const val DEFAULT_STREAM_URL = "rtmp://192.168.16.88:1935/thinklet.squid.run"
     const val DEFAULT_STREAM_KEY = "test_stream"
     

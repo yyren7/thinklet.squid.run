@@ -239,3 +239,4 @@ adb shell dumpsys activity services ai.fd.thinklet.app.squid.run/.ThinkletForegr
 
 2025-11-11 - Android 8.1 (API 27) 测试通过
 
+
