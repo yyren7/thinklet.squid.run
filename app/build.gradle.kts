@@ -19,6 +19,7 @@ android {
 
     buildFeatures {
         viewBinding = true
+        buildConfig = true
     }
 
     // Configure packaging options to support 16 KB page size
@@ -29,7 +30,11 @@ android {
     }
 
     buildTypes {
+        debug {
+            buildConfigField("boolean", "ENABLE_LOGCAT_CAPTURE", "true")
+        }
         release {
+            buildConfigField("boolean", "ENABLE_LOGCAT_CAPTURE", "false")
             isMinifyEnabled = false
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),

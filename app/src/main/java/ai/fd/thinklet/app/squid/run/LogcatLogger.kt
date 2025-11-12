@@ -51,6 +51,11 @@ class LogcatLogger private constructor(context: Context) : Thread.UncaughtExcept
         Thread.getDefaultUncaughtExceptionHandler()
     
     private val loggerScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+    
+    // BufferedOutputStream for efficient file writing
+    private var bufferedOutputStream: BufferedOutputStream? = null
+    private var lastFlushTime = 0L
+    private val FLUSH_INTERVAL_MS = 1000L // Flush every 1 second
 
     init {
         // 设置当前线程为默认的未捕获异常处理器
@@ -113,6 +118,15 @@ class LogcatLogger private constructor(context: Context) : Thread.UncaughtExcept
      */
     fun stop() {
         if (isRunning.compareAndSet(true, false)) {
+            try {
+                // Flush and close BufferedOutputStream
+                bufferedOutputStream?.flush()
+                bufferedOutputStream?.close()
+                bufferedOutputStream = null
+            } catch (e: Exception) {
+                Log.e(TAG, "Error closing buffered output stream", e)
+            }
+            
             logProcess?.destroy()
             logProcess = null
             loggerScope.cancel()
@@ -131,10 +145,13 @@ class LogcatLogger private constructor(context: Context) : Thread.UncaughtExcept
             // 启动logcat进程
             // 注意：在Android 4.1+之后，读取logcat需要READ_LOGS权限（需要系统签名或root）
             // 如果没有权限，logcat命令可能会失败，但不会影响应用运行
+            // 优化：只捕获本应用的 Info 级别及以上日志，其他应用日志静默
+            val packageName = context.packageName
             val processBuilder = ProcessBuilder(
                 "logcat",
                 "-v", "threadtime",  // 线程时间格式（包含日期、时间、PID、TID、优先级、标签）
-                "*:V"  // 捕获所有级别的日志
+                "${packageName}:I",  // 捕获本应用 Info 及以上级别日志（优化后）
+                "*:S"  // 其他应用静默（大幅减少日志量）
             )
             
             logProcess = processBuilder.start()
@@ -176,29 +193,49 @@ class LogcatLogger private constructor(context: Context) : Thread.UncaughtExcept
     }
 
     /**
-     * 写入日志到文件
+     * 写入日志到文件（优化版：使用 BufferedOutputStream）
      */
     private fun writeToFile(line: String) {
         try {
-            var file = currentLogFile ?: run {
+            // 检查是否需要创建新文件
+            if (currentLogFile == null) {
                 createNewLogFile()
-                currentLogFile
-            } ?: return
+            }
+            
+            val file = currentLogFile ?: return
             
             // 检查文件大小，如果超过限制则创建新文件
             val actualFileSize = file.length()
             if (actualFileSize >= MAX_FILE_SIZE) {
+                // 关闭旧的 BufferedOutputStream
+                bufferedOutputStream?.flush()
+                bufferedOutputStream?.close()
+                bufferedOutputStream = null
+                
                 createNewLogFile()
                 cleanupOldLogs()
-                file = currentLogFile ?: return
+            }
+            
+            // 确保 BufferedOutputStream 已初始化
+            if (bufferedOutputStream == null && currentLogFile != null) {
+                bufferedOutputStream = BufferedOutputStream(
+                    FileOutputStream(currentLogFile, true),
+                    8192  // 8KB buffer
+                )
             }
             
             val logLine = "$line\n"
             val bytes = logLine.toByteArray(Charsets.UTF_8)
             
-            FileOutputStream(file, true).use { fos ->
-                fos.write(bytes)
-                currentFileSize = file.length()
+            // 使用 BufferedOutputStream 写入（显著减少 I/O 操作）
+            bufferedOutputStream?.write(bytes)
+            currentFileSize += bytes.size
+            
+            // 定期 flush，而不是每次都 flush（减少磁盘写入）
+            val currentTime = System.currentTimeMillis()
+            if (currentTime - lastFlushTime > FLUSH_INTERVAL_MS) {
+                bufferedOutputStream?.flush()
+                lastFlushTime = currentTime
             }
         } catch (e: Exception) {
             Log.e(TAG, "Error writing to log file", e)
@@ -295,6 +332,13 @@ class LogcatLogger private constructor(context: Context) : Thread.UncaughtExcept
             currentLogFile = targetFile
             fileIndex = index
             currentFileSize = 0
+            
+            // 为新文件创建 BufferedOutputStream
+            bufferedOutputStream = BufferedOutputStream(
+                FileOutputStream(targetFile, true),
+                8192  // 8KB buffer
+            )
+            lastFlushTime = System.currentTimeMillis()
             
             Log.i(TAG, "Created new log file: ${targetFile.name} at ${targetFile.absolutePath}")
         } catch (e: Exception) {

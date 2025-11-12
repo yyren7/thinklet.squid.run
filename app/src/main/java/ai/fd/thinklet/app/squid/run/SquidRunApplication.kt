@@ -53,8 +53,15 @@ class SquidRunApplication : Application(), ViewModelStoreOwner {
 
     // Lazy initialization of LogcatLogger for system log capture
     // Note: start() should be called after permissions are granted
-    val logcatLogger: LogcatLogger by lazy {
-        LogcatLogger.getInstance(applicationContext)
+    // Only enabled in debug builds to reduce resource usage in production
+    val logcatLogger: LogcatLogger? by lazy {
+        if (BuildConfig.ENABLE_LOGCAT_CAPTURE) {
+            Log.i("SquidRunApplication", "📝 LogcatLogger enabled (debug build)")
+            LogcatLogger.getInstance(applicationContext)
+        } else {
+            Log.i("SquidRunApplication", "📝 LogcatLogger disabled (release build)")
+            null
+        }
     }
 
     override fun onCreate() {
@@ -160,7 +167,7 @@ class SquidRunApplication : Application(), ViewModelStoreOwner {
         ttsManager.shutdown()  // Call the same shutdown method
         geofenceManager.cleanup() // Cleanup geofence manager
         beaconScannerManager.cleanup() // Cleanup beacon scanner
-        logcatLogger.stop() // Stop logcat logger
+        logcatLogger?.stop() // Stop logcat logger (if enabled)
         super.onTerminate()
     }
 }

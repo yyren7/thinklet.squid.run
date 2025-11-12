@@ -450,8 +450,8 @@ class MainActivity : AppCompatActivity() {
             // Start LogcatLogger if not already started (e.g., app restarted with permissions already granted)
             try {
                 val logger = (application as SquidRunApplication).logcatLogger
-                // Check if logger is already running by trying to start it (start() handles already-running case)
-                logger.start()
+                // Check if logger is enabled and start it (start() handles already-running case)
+                logger?.start()
             } catch (e: Exception) {
                 Log.e("MainActivity", "Failed to start LogcatLogger in onResume", e)
             }
@@ -746,11 +746,15 @@ class MainActivity : AppCompatActivity() {
                 // All permissions have been granted.
                 binding.permissionGranted.text = "true"
                 
-                // Start LogcatLogger after permissions are granted
+                // Start LogcatLogger after permissions are granted (if enabled)
                 try {
                     val logger = (application as SquidRunApplication).logcatLogger
-                    logger.start()
-                    Log.i("MainActivity", "✅ LogcatLogger started after permissions granted")
+                    logger?.start()
+                    if (logger != null) {
+                        Log.i("MainActivity", "✅ LogcatLogger started after permissions granted")
+                    } else {
+                        Log.i("MainActivity", "ℹ️ LogcatLogger disabled (release build)")
+                    }
                 } catch (e: Exception) {
                     Log.e("MainActivity", "Failed to start LogcatLogger", e)
                 }
