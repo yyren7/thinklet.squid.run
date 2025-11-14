@@ -177,6 +177,30 @@ class GeofenceManager(
     }
     
     /**
+     * Clear all geofence zones
+     */
+    fun clearAllZones() {
+        geofenceZones.clear()
+        geofenceStates.clear()
+        recentBeacons.clear()
+        enterTimestamps.clear()
+        dwellNotified.clear()
+        updateUuidWhitelist()
+        updateActiveGeofences()
+        Log.i(TAG, "🗑️ Cleared all geofence zones")
+    }
+    
+    /**
+     * Update geofence zones from a list
+     * This replaces all existing zones with the new list
+     */
+    fun updateGeofenceZones(zones: List<GeofenceZone>) {
+        clearAllZones()
+        zones.forEach { addGeofenceZone(it) }
+        Log.i(TAG, "🔄 Updated geofence zones: ${zones.size} zones configured")
+    }
+    
+    /**
      * Remove geofence zone
      */
     fun removeGeofenceZone(zoneId: String) {
@@ -207,6 +231,41 @@ class GeofenceManager(
     }
     
     /**
+     * Get all active geofence zones with their states
+     * Returns a map of zone ID -> (zone name, state)
+     */
+    fun getAllGeofenceStates(): Map<String, Pair<String, GeofenceState>> {
+        return geofenceZones.mapValues { (_, zone) ->
+            Pair(zone.name, geofenceStates[zone.id] ?: GeofenceState.UNKNOWN)
+        }
+    }
+    
+    /**
+     * Get current geofence zone name (if inside any), null if outside all
+     */
+    fun getCurrentGeofenceZone(): String? {
+        geofenceZones.forEach { (zoneId, zone) ->
+            if (geofenceStates[zoneId] == GeofenceState.INSIDE) {
+                return zone.name
+            }
+        }
+        return null
+    }
+    
+    /**
+     * Get distances to all monitored BLE devices
+     * Returns a map of zone ID -> (zone name, distance in meters, state)
+     */
+    fun getBleDistances(): Map<String, Triple<String, Double?, GeofenceState>> {
+        return geofenceZones.mapValues { (zoneId, zone) ->
+            val beacon = recentBeacons[zoneId]
+            val distance = beacon?.distance
+            val state = geofenceStates[zoneId] ?: GeofenceState.UNKNOWN
+            Triple(zone.name, distance, state)
+        }
+    }
+    
+    /**
      * Add event listener
      */
     fun addEventListener(listener: GeofenceEventListener) {
@@ -229,11 +288,8 @@ class GeofenceManager(
         isMonitoring = true
         beaconScanner.startScanning()
         
-        // Update all recentBeacons timestamps to current time to avoid false positives from expired data during pause
-        val currentTime = System.currentTimeMillis()
-        recentBeacons.values.forEach { beacon ->
-            // Do not directly modify beacon (because it's a data class), but consider monitoring state in checkGeofenceStates
-        }
+        // Note: Do not reset recentBeacons timestamps here
+        // The monitoring state check in checkGeofenceStates() will prevent false positives during pause
         
         Log.i(TAG, "🟢 Started geofence monitoring (zones: ${geofenceZones.size}, active: ${geofenceStates.count { it.value == GeofenceState.INSIDE }})")
     }
@@ -312,6 +368,9 @@ class GeofenceManager(
     
     /**
      * Handle Beacon data update (get latest data from BeaconScannerManager periodically)
+     * This is necessary because BeaconScannerManager only calls onBeaconDiscovered for NEW beacons,
+     * not for updates to existing beacons (to avoid excessive listener callbacks)
+     * This method syncs the latest beacon data including updated timestamps and distances
      */
     private fun updateBeaconsFromScanner() {
         val latestBeacons = beaconScanner.getDiscoveredBeacons()
@@ -467,13 +526,15 @@ class GeofenceManager(
     /**
      * Start periodic check task
      * Periodically check geofence state and handle possible timeout situations
+     * Note: updateBeaconsFromScanner() is needed because BeaconScannerManager only notifies
+     * listeners on first discovery, not on every update (to avoid excessive callbacks)
      */
     private fun startPeriodicCheck() {
         scope.launch {
             while (true) {
-                kotlinx.coroutines.delay(3000) // Check every 3 seconds (slightly longer than BLE broadcast cycle of 2 seconds)
+                kotlinx.coroutines.delay(3000) // Check every 3 seconds
                 if (isMonitoring) {
-                    // Get latest beacon data from BeaconScannerManager
+                    // Update beacon data from scanner (needed to refresh timestamps and distances)
                     updateBeaconsFromScanner()
                 }
                 checkGeofenceStates()
@@ -504,7 +565,6 @@ class GeofenceManager(
                 // Use adaptive timeout based on last known distance:
                 // - If last distance was inside geofence, use longer timeout (60s) to avoid false exits
                 // - If last distance was outside geofence, use shorter timeout (30s)
-                val exitThreshold = zone.radiusMeters * HYSTERESIS_FACTOR
                 val wasInside = recentBeacon.distance <= zone.radiusMeters
                 val timeoutMs = if (wasInside) TIMEOUT_INSIDE_MS else TIMEOUT_OUTSIDE_MS
                 

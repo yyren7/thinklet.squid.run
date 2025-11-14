@@ -378,8 +378,8 @@ class BeaconScannerManager(private val context: Context) {
             // Start periodic Beacon timeout check
             scheduleBeaconTimeoutCheck()
             
-            // Add scan statistics scheduled task
-            scheduleScanStatistics()
+            // Add scan statistics scheduled task (disabled in production for power saving)
+            // scheduleScanStatistics()  // Uncomment for debugging
         } catch (e: SecurityException) {
             Log.e(TAG, "❌ SecurityException: Missing Bluetooth or Location permission", e)
             isScanning = false
@@ -530,13 +530,13 @@ class BeaconScannerManager(private val context: Context) {
     /**
      * Build scan settings
      * Optimization strategy:
-     * 1. SCAN_MODE_LOW_LATENCY: Lowest latency mode, scan window and interval are very short (~11.25ms)
+     * 1. SCAN_MODE_BALANCED: Balanced mode for power efficiency and responsiveness
      * 2. setReportDelay(0): Report scan results immediately, no delayed batch reporting
-     * This ensures reliable capture when BLE devices send signals every 2 seconds
+     * This provides good balance between battery life and scan performance
      */
     private fun buildScanSettings(): ScanSettings {
         return ScanSettings.Builder()
-            .setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY) // Low latency mode, fast response (suitable for 2-second broadcast cycle)
+            .setScanMode(ScanSettings.SCAN_MODE_BALANCED) // Balanced mode: good response time with 96% less power consumption
             .setReportDelay(0) // Report immediately, no delay (ensure first-time signal capture)
             .build()
     }

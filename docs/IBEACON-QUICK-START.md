@@ -219,3 +219,8 @@ adb shell am start -n ai.fd.thinklet.app.squid.run/.MainActivity
 
 
 
+
+
+
+
+

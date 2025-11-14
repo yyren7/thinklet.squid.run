@@ -43,11 +43,12 @@ class SquidRunApplication : Application(), ViewModelStoreOwner {
             context = applicationContext,
             streamUrl = null, // Initialize with null, will be updated later
             networkManager = networkManager, // Inject the NetworkManager instance
-            storageManager = storageManager // Inject the StorageManager instance
+            storageManager = storageManager, // Inject the StorageManager instance
+            geofenceManager = null  // Will be set later after geofenceManager is initialized
         ).also {
-            GlobalScope.launch {
-                it.start()
-            }
+            // Start synchronously to ensure the manager is fully ready when first accessed
+            // This prevents race conditions where updateStreamUrl() might be called before start() completes
+            it.start()
         }
     }
 
@@ -102,10 +103,10 @@ class SquidRunApplication : Application(), ViewModelStoreOwner {
         // Note: LogcatLogger initialization is deferred until permissions are granted
         // It will be started in MainActivity.onRequestPermissionsResult() after permissions are granted
         
-        // The StatusReportingManager is lazily initialized,
-        // so it will be created and started the first time it is accessed.
-        // We can trigger the creation here if we want it to start immediately with the app.
-        statusReportingManager
+        // Note: StatusReportingManager is lazily initialized and will be created
+        // the first time it is accessed. We do NOT initialize it here to avoid
+        // generating a temporary UUID before permissions are granted.
+        // It will be initialized in MainActivity.initializeMainContent() after all permissions are granted.
 
         // ⚠️ Important: Immediately trigger TTS initialization in background thread to avoid ANR when first called on main thread
         GlobalScope.launch(kotlinx.coroutines.Dispatchers.IO) {
@@ -130,27 +131,29 @@ class SquidRunApplication : Application(), ViewModelStoreOwner {
         BeaconScannerManager(applicationContext)
     }
 
+    // Lazy initialization of BLE device configuration manager
+    val bleDeviceConfigManager: BleDeviceConfigManager by lazy {
+        BleDeviceConfigManager(applicationContext)
+    }
+
     // Lazy initialization of GeofenceManager for electronic geofencing
     val geofenceManager: GeofenceManager by lazy {
-        GeofenceManager(applicationContext, beaconScannerManager).also {
-            // Add example geofence zones (can be configured according to actual needs)
-            // Here we add an example geofence, you can configure it according to actual iBeacon device information
-            Log.i("GeofenceManager", "📍 Initializing geofence zones...")
+        GeofenceManager(applicationContext, beaconScannerManager).also { manager ->
+            Log.i("GeofenceManager", "📍 Initializing geofence zones from BLE config...")
             
-            // Configure geofence zone
-            // Based on actual Beacon device info: UUID=E2C56DB5-DFFB-48D2-B060-D0F5A71096E0, Major=0, Minor=0
-            val zone1 = GeofenceZone(
-                id = "zone_1",
-                name = "Geofence Zone 1",
-                beaconUuid = "E2C56DB5-DFFB-48D2-B060-D0F5A71096E0",
-                beaconMajor = 0,  // Actual Beacon Major value
-                beaconMinor = 0,  // Actual Beacon Minor value
-                radiusMeters = 10.0,
-                enabled = true
-            )
-            it.addGeofenceZone(zone1)
+            // Load geofence zones from BLE device configuration
+            val deviceId = statusReportingManager.deviceId
+            val zones = bleDeviceConfigManager.toGeofenceZones(deviceId)
             
-            Log.i("GeofenceManager", "✅ GeofenceManager initialized")
+            if (zones.isNotEmpty()) {
+                zones.forEach { zone -> manager.addGeofenceZone(zone) }
+                Log.i("GeofenceManager", "✅ GeofenceManager initialized with ${zones.size} zones from BLE config")
+            } else {
+                Log.w("GeofenceManager", "⚠️ No BLE devices configured, GeofenceManager has no zones")
+            }
+            
+            // Set GeofenceManager reference in StatusReportingManager
+            statusReportingManager.setGeofenceManager(manager)
         }
     }
 

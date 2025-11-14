@@ -235,6 +235,10 @@ class MainViewModel(
     val recordVideoWidth: Int = savedState.get<Int>("recordVideoWidth") ?: DefaultConfig.DEFAULT_RECORD_VIDEO_WIDTH
     val recordVideoHeight: Int = savedState.get<Int>("recordVideoHeight") ?: DefaultConfig.DEFAULT_RECORD_VIDEO_HEIGHT
     val recordBitrateBps: Int = savedState.get<Int>("recordBitrate")?.let { it * 1024 } ?: (DefaultConfig.DEFAULT_RECORD_VIDEO_BITRATE * 1024)
+    
+    // Recording segmentation settings
+    val isRecordingSegmentationEnabled: Boolean = savedState.get<Boolean>("enableRecordingSegmentation") ?: DefaultConfig.DEFAULT_ENABLE_RECORDING_SEGMENTATION
+    val segmentSizeBytes: Long = savedState.get<Int>("segmentSizeMB")?.let { it * 1024L * 1024L } ?: DefaultConfig.DEFAULT_SEGMENT_SIZE_BYTES
 
     private val _connectionStatus = MutableStateFlow(ConnectionStatus.IDLE)
     val connectionStatus: StateFlow<ConnectionStatus> = _connectionStatus.asStateFlow()
@@ -337,6 +341,30 @@ class MainViewModel(
     // Flag to prevent concurrent recording operations
     @Volatile
     private var isRecordingOperationInProgress: Boolean = false
+    
+    // Recording segmentation support
+    private val recordingSegmentManager: RecordingSegmentManager by lazy {
+        RecordingSegmentManager(
+            maxSegmentSizeBytes = segmentSizeBytes, // Configurable segment size
+            checkIntervalMs = 5000L, // Check every 5 seconds
+            triggerThresholdRatio = 0.95f // Trigger at 95% of max size
+        ).apply {
+            // Set callback for segment switching
+            onSegmentSwitchNeeded = { currentFile, nextFilePath ->
+                handleSegmentSwitch(currentFile, nextFilePath)
+            }
+        }
+    }
+    
+    // Track current recording file for segment management
+    private var currentRecordingFile: File? = null
+    
+    // Flag to indicate if we're in the middle of a segment switch
+    @Volatile
+    private var isSegmentSwitching: Boolean = false
+    
+    // Store next file path for segment switching (set before stopRecord, used in STOPPED callback)
+    private var nextSegmentFilePath: String? = null
     
     // Bitrate monitoring
     @Volatile
@@ -924,8 +952,12 @@ class MainViewModel(
             // Generate recording file path using StorageManager
             val recordFolder = storageManager.getRecordingFolder()
             val timestamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date())
-            val recordFile = File(recordFolder, "recording_$timestamp.mp4")
+            // Use part000 for initial file to maintain consistent naming
+            val recordFile = File(recordFolder, "recording_${timestamp}_part000.mp4")
             val recordPath = recordFile.absolutePath
+            
+            // Store current recording file for segment management
+            currentRecordingFile = recordFile
             
             Log.i("MainViewModel", "Recording to: $recordPath (storage: ${storageManager.getCurrentStorageType()})")
 
@@ -946,6 +978,21 @@ class MainViewModel(
                                 ledController.startLedBlinking()
                                 Log.d("MainViewModel", "💡 LED blinking started")
                                 
+                                // ✅ Start segment monitoring (if enabled and not in the middle of a segment switch)
+                                if (isRecordingSegmentationEnabled) {
+                                    if (!isSegmentSwitching) {
+                                        recordingSegmentManager.startMonitoring(recordFile, viewModelScope)
+                                        Log.i("MainViewModel", "📊 Segment monitoring started (max size: ${segmentSizeBytes / (1024 * 1024)}MB)")
+                                    } else {
+                                        // Update file for ongoing monitoring
+                                        recordingSegmentManager.updateCurrentFile(recordFile)
+                                        isSegmentSwitching = false
+                                        Log.i("MainViewModel", "📊 Segment monitoring updated to new file")
+                                    }
+                                } else {
+                                    Log.d("MainViewModel", "⏭️ Recording segmentation disabled")
+                                }
+                                
                                 // Duration timer removed - frontend now handles timing
                                 // recordingStartTime = System.currentTimeMillis()
                                 // startRecordingDurationTimer()
@@ -956,15 +1003,41 @@ class MainViewModel(
                             }
                             RecordController.Status.STOPPED -> {
                                 Log.i("MainViewModel", "⏹️ Recording STOPPED")
-                                _isRecording.value = false
-                                ledController.stopLedBlinking()
-                                Log.d("MainViewModel", "💡 LED blinking stopped")
+                                
+                                // Only update state if not in segment switching mode
+                                if (!isSegmentSwitching) {
+                                    _isRecording.value = false
+                                    ledController.stopLedBlinking()
+                                    Log.d("MainViewModel", "💡 LED blinking stopped")
+                                    
+                                    // Stop segment monitoring
+                                    recordingSegmentManager.stopMonitoring()
+                                    Log.i("MainViewModel", "📊 Segment monitoring stopped")
+                                    
+                                    // TTS and event notification only for manual stop
+                                    ttsManager.speakRecordingFinished()
+                                    streamingEventMutableSharedFlow.tryEmit(
+                                        StreamingEvent("Recording stopped: $recordPath")
+                                    )
+                                } else {
+                                    // Segment switching: silent transition, no TTS, no LED change
+                                    Log.d("MainViewModel", "🔄 Segment switching in progress, keeping recording state active")
+                                    
+                                    // Start next segment after a brief delay to ensure MediaCodec resources are released
+                                    nextSegmentFilePath?.let { nextPath ->
+                                        viewModelScope.launch {
+                                            // Wait for MediaCodec and MediaMuxer to fully release resources
+                                            // This is critical to prevent "start failed" IllegalStateException
+                                            delay(200) // 200ms delay ensures clean resource transition
+                                            
+                                            Log.i("MainViewModel", "▶️ Starting next segment after STOPPED callback: ${File(nextPath).name}")
+                                            startNextSegment(nextPath)
+                                            nextSegmentFilePath = null
+                                        }
+                                    }
+                                }
                                 // Duration timer removed - frontend now handles timing
                                 // stopRecordingDurationTimer()
-                                ttsManager.speakRecordingFinished()
-                                streamingEventMutableSharedFlow.tryEmit(
-                                    StreamingEvent("Recording stopped: $recordPath")
-                                )
                                 
                                 // Calculate and save MD5 after recording stops.
                                 // Crucial: Delay execution to ensure the underlying MediaMuxer has fully flushed data to disk.
@@ -1064,6 +1137,207 @@ class MainViewModel(
     }
 
     /**
+     * Handle segment switching when file size limit is reached.
+     * This method stops the current recording and immediately starts a new one
+     * to maintain continuous recording across multiple files.
+     * 
+     * @param currentFile Current recording file that reached size limit
+     * @param nextFilePath Path for the next segment file
+     */
+    private fun handleSegmentSwitch(currentFile: File, nextFilePath: String) {
+        Log.i("MainViewModel", "🔄 Handling segment switch: ${currentFile.name} -> ${File(nextFilePath).name}")
+        
+        val streamSnapshot = stream
+        if (streamSnapshot == null) {
+            Log.e("MainViewModel", "❌ Cannot switch segment: stream is null")
+            return
+        }
+        
+        if (!_isRecording.value) {
+            Log.w("MainViewModel", "⚠️ Not recording, ignoring segment switch")
+            return
+        }
+        
+        // Set flag to indicate we're in segment switching mode
+        isSegmentSwitching = true
+        nextSegmentFilePath = nextFilePath
+        
+        try {
+            Log.i("MainViewModel", "⏸️ Stopping current segment...")
+            Log.i("MainViewModel", "   Next segment will be: ${File(nextFilePath).name}")
+            
+            // Stop current recording
+            // The STOPPED callback will trigger startNextSegment() to start the new recording
+            streamSnapshot.stopRecord()
+        } catch (e: Exception) {
+            Log.e("MainViewModel", "❌ Failed to switch segment", e)
+            isSegmentSwitching = false
+            nextSegmentFilePath = null
+            _isRecording.value = false
+            ledController.stopLedBlinking()
+            recordingSegmentManager.stopMonitoring()
+            streamingEventMutableSharedFlow.tryEmit(
+                StreamingEvent("Failed to switch recording segment: ${e.message}")
+            )
+        }
+    }
+    
+    /**
+     * Start next segment recording after current segment stopped.
+     * This is called from STOPPED callback during segment switching.
+     */
+    private fun startNextSegment(nextFilePath: String) {
+        val streamSnapshot = stream
+        if (streamSnapshot == null) {
+            Log.e("MainViewModel", "❌ Cannot start next segment: stream is null")
+            isSegmentSwitching = false
+            nextSegmentFilePath = null
+            _isRecording.value = false
+            ledController.stopLedBlinking()
+            recordingSegmentManager.stopMonitoring()
+            return
+        }
+        
+        val nextFile = File(nextFilePath)
+        currentRecordingFile = nextFile
+        
+        try {
+            Log.i("MainViewModel", "▶️ Starting next segment: ${nextFile.name}")
+            
+            // Start recording to new file
+            streamSnapshot.startRecord(
+                nextFilePath,
+                null,  // RecordController.RecordTracks - use default
+                object : RecordController.Listener {
+                    override fun onStatusChange(status: RecordController.Status) {
+                        Log.d("MainViewModel", "📹 Segment recording status: $status")
+                        when (status) {
+                            RecordController.Status.STARTED -> {
+                                Log.i("MainViewModel", "✅ Next segment STARTED successfully: ${nextFile.name}")
+                                
+                                // Update segment manager with new file
+                                recordingSegmentManager.updateCurrentFile(nextFile)
+                                isSegmentSwitching = false
+                                
+                                // Silent transition: no TTS, no LED change, only log event
+                                val segmentNum = recordingSegmentManager.getCurrentSegmentIndex()
+                                Log.i("MainViewModel", "📊 Segment switch completed successfully (segment #$segmentNum): ${nextFile.name}")
+                                
+                                // Emit event similar to normal recording start (for consistency)
+                                streamingEventMutableSharedFlow.tryEmit(
+                                    StreamingEvent("Recording started: $nextFilePath")
+                                )
+                            }
+                            RecordController.Status.STOPPED -> {
+                                Log.i("MainViewModel", "⏹️ Segment recording STOPPED")
+                                
+                                // Only update state if not in another segment switching mode
+                                if (!isSegmentSwitching) {
+                                    _isRecording.value = false
+                                    ledController.stopLedBlinking()
+                                    recordingSegmentManager.stopMonitoring()
+                                } else {
+                                    // Segment switching in progress, start next segment
+                                    Log.d("MainViewModel", "🔄 Segment switching in progress for next recording")
+                                    nextSegmentFilePath?.let { nextPath ->
+                                        viewModelScope.launch {
+                                            // Wait for MediaCodec and MediaMuxer to fully release resources
+                                            delay(200)
+                                            
+                                            Log.i("MainViewModel", "▶️ Starting next segment after STOPPED callback: ${File(nextPath).name}")
+                                            startNextSegment(nextPath)
+                                            nextSegmentFilePath = null
+                                        }
+                                    }
+                                }
+                                
+                                // Calculate and save MD5 for the segment file (same as normal recording)
+                                viewModelScope.launch(Dispatchers.IO) {
+                                    try {
+                                        // Wait for file size to stabilize before calculating MD5
+                                        Log.i("MainViewModel", "Waiting for segment file to stabilize: ${nextFile.name}")
+                                        
+                                        var previousSize = 0L
+                                        var stableCount = 0
+                                        val maxWaitTime = 30000L
+                                        val startTime = System.currentTimeMillis()
+                                        
+                                        while (stableCount < 3 && (System.currentTimeMillis() - startTime) < maxWaitTime) {
+                                            if (!nextFile.exists()) {
+                                                Log.e("MainViewModel", "Segment file does not exist: ${nextFile.name}")
+                                                return@launch
+                                            }
+                                            
+                                            val currentSize = nextFile.length()
+                                            
+                                            if (currentSize == previousSize && currentSize > 0) {
+                                                stableCount++
+                                                Log.d("MainViewModel", "File size stable (${stableCount}/3): ${currentSize} bytes")
+                                            } else {
+                                                stableCount = 0
+                                                Log.d("MainViewModel", "File size changed: $previousSize -> $currentSize bytes")
+                                            }
+                                            
+                                            previousSize = currentSize
+                                            delay(1000)
+                                        }
+                                        
+                                        val fileSize = nextFile.length()
+                                        val waitedTime = System.currentTimeMillis() - startTime
+                                        
+                                        if (stableCount < 3) {
+                                            Log.w("MainViewModel", "File size did not stabilize after ${waitedTime}ms, proceeding anyway")
+                                        } else {
+                                            Log.i("MainViewModel", "File size stabilized after ${waitedTime}ms at ${fileSize} bytes")
+                                        }
+                                        
+                                        if (fileSize < 1024) {
+                                            Log.w("MainViewModel", "Segment file size is too small (${fileSize} bytes): ${nextFile.name}")
+                                        }
+                                        
+                                        Log.i("MainViewModel", "Starting MD5 calculation for segment: ${nextFile.name} (${fileSize} bytes)")
+                                        val success = MD5Utils.calculateAndSaveMD5(nextFile)
+                                        if (success) {
+                                            Log.i("MainViewModel", "MD5 file created successfully for segment: ${nextFile.name}")
+                                            statusReportingManager.notifyFileListUpdated()
+                                            storageManager.checkAndNotifyCapacity("SegmentComplete[${nextFile.name}]")
+                                        } else {
+                                            Log.w("MainViewModel", "Failed to create MD5 file for segment: ${nextFile.name}")
+                                        }
+                                    } catch (e: Exception) {
+                                        Log.e("MainViewModel", "Error while creating MD5 file for segment: ${nextFile.name}", e)
+                                    }
+                                }
+                            }
+                            RecordController.Status.RECORDING -> {
+                                // Recording in progress
+                            }
+                            RecordController.Status.PAUSED -> {
+                                Log.w("MainViewModel", "⚠️ Segment recording PAUSED")
+                            }
+                            RecordController.Status.RESUMED -> {
+                                Log.i("MainViewModel", "▶️ Segment recording RESUMED")
+                            }
+                        }
+                    }
+                }
+            )
+            
+            Log.i("MainViewModel", "📹 Segment recording API called for: ${nextFile.name}")
+        } catch (e: Exception) {
+            Log.e("MainViewModel", "❌ Failed to start next segment", e)
+            isSegmentSwitching = false
+            nextSegmentFilePath = null
+            _isRecording.value = false
+            ledController.stopLedBlinking()
+            recordingSegmentManager.stopMonitoring()
+            streamingEventMutableSharedFlow.tryEmit(
+                StreamingEvent("Failed to start next segment: ${e.message}")
+            )
+        }
+    }
+    
+    /**
      * Stop recording.
      * Thread-safe: Uses operation lock to prevent concurrent operations.
      * 
@@ -1099,6 +1373,13 @@ class MainViewModel(
         
         try {
             Log.i("MainViewModel", "🛑 Stopping recording...")
+            
+            // Stop segment monitoring (if active)
+            if (recordingSegmentManager.isMonitoring()) {
+                recordingSegmentManager.stopMonitoring()
+                Log.i("MainViewModel", "📊 Segment monitoring stopped")
+            }
+            
             streamSnapshot.stopRecord()
             // The status will be updated in the callback.
             // Delay checking for camera resource release to give the recording stop callback enough time to complete MD5 calculation.
@@ -1114,6 +1395,10 @@ class MainViewModel(
                 StreamingEvent("Failed to stop recording: ${e.message}")
             )
             _isRecording.value = false
+            
+            // Ensure segment monitoring is stopped
+            recordingSegmentManager.stopMonitoring()
+            
             // Even if failed, delay a bit before checking resource release
             viewModelScope.launch {
                 delay(500)

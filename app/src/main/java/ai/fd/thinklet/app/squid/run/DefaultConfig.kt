@@ -28,6 +28,11 @@ object DefaultConfig {
     const val DEFAULT_RECORD_VIDEO_HEIGHT = 1080
     const val DEFAULT_RECORD_VIDEO_BITRATE = 8192 // kbps, higher quality for local recording
     
+    // Recording Segmentation Configuration
+    const val DEFAULT_ENABLE_RECORDING_SEGMENTATION = true // Enable auto-segmentation by default
+    const val DEFAULT_SEGMENT_SIZE_MB = 20 // Default segment size: 20MB
+    const val DEFAULT_SEGMENT_SIZE_BYTES = 20_971_520L // 20MB in bytes (20 * 1024 * 1024)
+    
     // Audio Configuration
     const val DEFAULT_AUDIO_SAMPLE_RATE = 48000 // Hz
     const val DEFAULT_AUDIO_BITRATE = 128 // kbps
@@ -53,7 +58,9 @@ object DefaultConfig {
             "audioChannel" to DEFAULT_AUDIO_CHANNEL,
             "echoCanceler" to DEFAULT_ECHO_CANCELER,
             "micMode" to DEFAULT_MIC_MODE,
-            "preview" to DEFAULT_PREVIEW
+            "preview" to DEFAULT_PREVIEW,
+            "enableRecordingSegmentation" to DEFAULT_ENABLE_RECORDING_SEGMENTATION,
+            "segmentSizeMB" to DEFAULT_SEGMENT_SIZE_MB
         )
     }
 }

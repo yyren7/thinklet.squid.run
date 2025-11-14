@@ -11,8 +11,8 @@ android {
         applicationId = "ai.fd.thinklet.app.squid.run"
         minSdk = 27
         targetSdk = 35
-        versionCode = 2
-        versionName = "1.1"
+        versionCode = 4
+        versionName = "0.4"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -29,13 +29,24 @@ android {
         }
     }
 
+    signingConfigs {
+        create("release") {
+            storeFile = file("keystore/release.keystore")
+            storePassword = "android"
+            keyAlias = "release"
+            keyPassword = "android"
+        }
+    }
+
     buildTypes {
         debug {
             buildConfigField("boolean", "ENABLE_LOGCAT_CAPTURE", "true")
+            signingConfig = signingConfigs.getByName("release")
         }
         release {
             buildConfigField("boolean", "ENABLE_LOGCAT_CAPTURE", "false")
             isMinifyEnabled = false
+            signingConfig = signingConfigs.getByName("release")
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"

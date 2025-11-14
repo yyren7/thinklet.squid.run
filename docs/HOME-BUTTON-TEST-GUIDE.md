@@ -224,3 +224,8 @@ adb logcat | grep "Is launcher"
 2025-11-11 - 方案1实现和测试
 
 
+
+
+
+
+

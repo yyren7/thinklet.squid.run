@@ -98,6 +98,7 @@ class MainActivity : AppCompatActivity() {
 
     private var previewBinding: PreviewBinding? = null
     private var isPreviewInflated = false
+    private var isMainContentInitialized = false
 
     private val handler = Handler(Looper.getMainLooper())
     private lateinit var longPressRunnable: Runnable
@@ -142,12 +143,57 @@ class MainActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         
+        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        enableEdgeToEdge()
+        
+        // Check permissions first before initializing main content
+        if (!permissionHelper.areAllPermissionsGranted()) {
+            // Show permission waiting screen
+            setContentView(android.view.LayoutInflater.from(this).inflate(R.layout.activity_main_permission_waiting, null))
+            Log.i("MainActivity", "⏳ Waiting for permissions, showing waiting screen")
+            
+            // Request permissions immediately
+            checkAndRequestPermissions()
+            return
+        }
+        
+        // All permissions granted, initialize main content
+        initializeMainContent()
+    }
+    
+    /**
+     * Initialize main content after all permissions are granted.
+     * This includes initializing StatusReportingManager deviceId and setting up the UI.
+     */
+    private fun initializeMainContent() {
+        if (isMainContentInitialized) {
+            Log.w("MainActivity", "Main content already initialized, skipping")
+            return
+        }
+        
+        isMainContentInitialized = true
+        
+        // Re-initialize device ID now that permissions are granted
+        statusReportingManager.reinitializeDeviceId()
+        Log.i("MainActivity", "✅ Device ID reinitialized: ${statusReportingManager.deviceId} (source: ${statusReportingManager.deviceIdSource})")
+        
+        // Re-initialize geofence zones with the correct device ID
+        // Note: geofenceManager is lazy, so it will be initialized here with the correct deviceId
+        // But if it was already initialized (shouldn't happen), we update the zones
+        try {
+            val app = application as SquidRunApplication
+            val deviceId = statusReportingManager.deviceId
+            val zones = app.bleDeviceConfigManager.toGeofenceZones(deviceId)
+            geofenceManager.updateGeofenceZones(zones)
+            Log.i("MainActivity", "✅ Geofence zones updated with device ID: $deviceId")
+        } catch (e: Exception) {
+            Log.e("MainActivity", "Failed to update geofence zones", e)
+        }
+        
         // Start foreground service to protect all features
         ThinkletForegroundService.start(this, statusReportingManager.deviceId)
         Log.i("MainActivity", "🚀 Foreground service started to protect all features")
         
-        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-        enableEdgeToEdge()
         setContentView(binding.root)
         
         // Handle commands from intent on startup
@@ -744,7 +790,16 @@ class MainActivity : AppCompatActivity() {
         if (requestCode == PermissionHelper.PERMISSION_REQUEST_CODE) {
             if (grantResults.isNotEmpty() && grantResults.all { it == PackageManager.PERMISSION_GRANTED }) {
                 // All permissions have been granted.
-                binding.permissionGranted.text = "true"
+                Log.i("MainActivity", "✅ All permissions granted")
+                
+                // Initialize main content if not already initialized
+                if (!isMainContentInitialized) {
+                    Log.i("MainActivity", "🚀 Initializing main content after permissions granted")
+                    initializeMainContent()
+                } else {
+                    // Main content already initialized, just update permission status
+                    binding.permissionGranted.text = "true"
+                }
                 
                 // Start LogcatLogger after permissions are granted (if enabled)
                 try {
@@ -762,7 +817,6 @@ class MainActivity : AppCompatActivity() {
                 // Do not automatically initialize the camera; wait for the user to take action (stream/record/preview).
             } else {
                 // Some permissions were denied.
-                binding.permissionGranted.text = "false"
                 val deniedPermissions = permissionHelper.getDeniedPermissionNames()
                 val hasCameraPermission = deniedPermissions.contains("Camera")
                 

@@ -55,6 +55,20 @@ data class StorageCapacityData(
     val usagePercent: Double
 )
 
+// BLE distance information for geofencing
+data class BleDistanceInfo(
+    val bleId: String,
+    val bleName: String,
+    val distance: Double?,  // Distance in meters, null if not detected
+    val state: String       // INSIDE, OUTSIDE, UNKNOWN
+)
+
+// Geofence information
+data class GeofenceInfo(
+    val currentZone: String?,                    // Current geofence zone name, null if outside all zones
+    val bleDistances: List<BleDistanceInfo>      // Distances to all monitored BLE devices
+)
+
 data class DeviceStatus(
     val batteryLevel: Int,
     val isCharging: Boolean,
@@ -68,7 +82,8 @@ data class DeviceStatus(
     var fileServerPort: Int = 8889,
     var fileServerEnabled: Boolean = false,
     var internalStorageCapacity: StorageCapacityData? = null,
-    var sdCardCapacity: StorageCapacityData? = null
+    var sdCardCapacity: StorageCapacityData? = null,
+    var geofenceInfo: GeofenceInfo? = null
 )
 
 data class StatusUpdate(
@@ -91,7 +106,8 @@ class StatusReportingManager(
     private val context: Context,
     private var streamUrl: String?,
     private val networkManager: NetworkManager,
-    private val storageManager: StorageManager
+    private val storageManager: StorageManager,
+    private var geofenceManager: GeofenceManager? = null
 ) {
 
     var isStreamingReady: Boolean = false
@@ -110,9 +126,12 @@ class StatusReportingManager(
     private var reconnectTimer: Timer? = null
     private var reconnectAttempts = 0
     private val gson = Gson()
-    val deviceId: String
-    val deviceIdSource: String
-    val deviceType: DeviceType
+    var deviceId: String
+        private set
+    var deviceIdSource: String
+        private set
+    var deviceType: DeviceType
+        private set
 
     // File transfer server - completely subordinate to StatusReportingManager
     // Its lifecycle can only be controlled by the start() and stop() methods
@@ -134,15 +153,15 @@ class StatusReportingManager(
     private var lastBatteryLevel: Int = -1
     private var lastChargingState: Boolean = false
     
-    // Dynamic reporting interval: 15 seconds normally, 5 seconds during streaming/recording
+    // Dynamic reporting interval: 1 second for both normal and active modes
     private var currentReportInterval: Long = NORMAL_REPORT_INTERVAL
     
     companion object {
         const val ACTION_SERVER_DISCONNECTED = "ai.fd.thinklet.app.squid.run.SERVER_DISCONNECTED"
         const val ACTION_RECONNECT_STREAMING = "ai.fd.thinklet.app.squid.run.RECONNECT_STREAMING"
         private const val TAG = "StatusReportingManager"
-        private const val NORMAL_REPORT_INTERVAL = 5000L  // 5 seconds
-        private const val ACTIVE_REPORT_INTERVAL = 5000L   // 5 seconds
+        private const val NORMAL_REPORT_INTERVAL = 1000L  // 1 second
+        private const val ACTIVE_REPORT_INTERVAL = 1000L   // 1 second
         // Progressive reconnection: 1s, 2s, 3s, 4s, 5s (max 5 seconds)
         // This provides fast initial reconnection with gradual increase, capped at 5 seconds
         private const val MAX_RECONNECT_DELAY = 5000L      // 5 seconds maximum
@@ -230,6 +249,33 @@ class StatusReportingManager(
         Log.w(TAG, "Could not get hardware serial. Generating temporary UUID for this session.")
         val newId = UUID.randomUUID().toString()
         return Pair(newId, "Temporary UUID")
+    }
+    
+    /**
+     * Re-initialize device ID after permissions are granted.
+     * This should be called when READ_PHONE_STATE permission is granted to get the real serial number.
+     */
+    @SuppressLint("HardwareIds", "MissingPermission")
+    fun reinitializeDeviceId() {
+        val (id, source) = initializeDeviceId()
+        val oldId = this.deviceId
+        this.deviceId = id
+        this.deviceIdSource = source
+        this.deviceType = when {
+            id.startsWith("P", ignoreCase = true) -> DeviceType.PORTRAIT
+            else -> DeviceType.LANDSCAPE // Starts with M or other cases, defaults to landscape
+        }
+        
+        if (oldId != id) {
+            Log.i(TAG, "Device ID reinitialized: $oldId -> $id (source: $source)")
+            // Update stream key if it was set to the old device ID
+            if (this.streamKey == oldId) {
+                this.streamKey = id
+                sendDeviceStatus()
+            }
+        } else {
+            Log.d(TAG, "Device ID unchanged after reinitialization: $id")
+        }
     }
 
     fun updateStreamUrl(newStreamUrl: String?) {
@@ -523,6 +569,17 @@ class StatusReportingManager(
             override fun onMessage(webSocket: WebSocket, text: String) {
                 Log.d(TAG, "📥 Received message: $text")
                 try {
+                    // First try to parse as a generic JSON object to determine the type
+                    val jsonObject = gson.fromJson(text, com.google.gson.JsonObject::class.java)
+                    
+                    // Check if this is a BLE configuration update
+                    if (jsonObject.has("type") && jsonObject.get("type").asString == "bleConfigUpdate") {
+                        val configJson = jsonObject.get("config").toString()
+                        handleBleConfigUpdate(configJson)
+                        return
+                    }
+                    
+                    // Otherwise, try to parse as a command
                     val command = gson.fromJson(text, Command::class.java)
                     if (command?.command == null) {
                         Log.w(TAG, "Received message with unknown format: $text")
@@ -530,7 +587,7 @@ class StatusReportingManager(
                     }
                     handleCommand(command)
                 } catch (e: Exception) {
-                    Log.w(TAG, "Failed to parse command from message: $text", e)
+                    Log.w(TAG, "Failed to parse message: $text", e)
                 }
             }
 
@@ -650,6 +707,33 @@ class StatusReportingManager(
             }
         }
     }
+    
+    /**
+     * Handle BLE configuration update from server
+     */
+    private fun handleBleConfigUpdate(configJson: String) {
+        Log.i(TAG, "📡 Received BLE configuration update from server")
+        
+        GlobalScope.launch {
+            try {
+                val app = context.applicationContext as? SquidRunApplication
+                if (app != null) {
+                    // Update BLE configuration
+                    app.bleDeviceConfigManager.updateFromJson(configJson)
+                    
+                    // Update geofence zones based on new configuration
+                    val zones = app.bleDeviceConfigManager.toGeofenceZones(deviceId)
+                    app.geofenceManager.updateGeofenceZones(zones)
+                    
+                    Log.i(TAG, "✅ BLE configuration updated successfully: ${zones.size} zones")
+                } else {
+                    Log.e(TAG, "❌ Failed to get SquidRunApplication instance")
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "❌ Failed to update BLE configuration", e)
+            }
+        }
+    }
 
     fun sendOfflineStatusAndStop() {
         if (webSocket == null) {
@@ -703,6 +787,13 @@ class StatusReportingManager(
     }
 
     /**
+     * Set GeofenceManager reference for status reporting
+     */
+    fun setGeofenceManager(manager: GeofenceManager) {
+        this.geofenceManager = manager
+    }
+
+    /**
      * Gets the device status.
      * Includes complete status information for the file server, all information is obtained uniformly from StatusReportingManager.
      */
@@ -745,6 +836,24 @@ class StatusReportingManager(
             )
         }
 
+        // Get geofence information
+        val geofenceInfo = geofenceManager?.let { manager ->
+            val currentZone = manager.getCurrentGeofenceZone()
+            val bleDistances = manager.getBleDistances().map { (bleId, triple) ->
+                val (bleName, distance, state) = triple
+                BleDistanceInfo(
+                    bleId = bleId,
+                    bleName = bleName,
+                    distance = distance,
+                    state = state.name
+                )
+            }
+            GeofenceInfo(
+                currentZone = currentZone,
+                bleDistances = bleDistances
+            )
+        }
+
         return DeviceStatus(
             batteryLevel = batteryLevel,
             isCharging = isCharging,
@@ -758,7 +867,8 @@ class StatusReportingManager(
             fileServerPort = 8889,  // File server port (fixed)
             fileServerEnabled = this.fileServerEnabled,  // File server status (managed by StatusReportingManager)
             internalStorageCapacity = internalCapacityData,
-            sdCardCapacity = sdCardCapacityData
+            sdCardCapacity = sdCardCapacityData,
+            geofenceInfo = geofenceInfo
         )
     }
 
